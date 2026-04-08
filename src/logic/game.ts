@@ -15,7 +15,7 @@ import {
 } from '../shared/ui';
 import { navigate, type GameModule } from '../shared/router';
 import { initSignatures, ALL_SEQS } from '../shared/signatures';
-import { getUser, isSignedIn, signInWithGitHub, signInWithGoogle, signOut, setAuthChangeCallback, type CommunityLevel } from '../shared/supabase';
+import { getUser, isSignedIn, setAuthChangeCallback, type CommunityLevel } from '../shared/supabase';
 import * as api from '../shared/api';
 
 type Screen = 'menu' | 'chooser' | 'level' | 'help' | 'community' | 'leaderboard' | 'profile';
@@ -196,50 +196,17 @@ function renderMenu() {
 
   container.appendChild(btnCol);
 
-  // Auth section
-  const authSection = el('div', 'auth-section');
+  // Profile/leaderboard links (only if signed in)
   if (isSignedIn()) {
-    const user = getUser()!;
-    const avatar = user.user_metadata?.avatar_url;
-    const name = user.user_metadata?.user_name || user.user_metadata?.name || user.email || 'User';
-
-    const userRow = el('div', 'auth-user-row');
-    if (avatar) {
-      const img = document.createElement('img');
-      img.src = avatar;
-      img.className = 'auth-avatar';
-      img.alt = name;
-      userRow.appendChild(img);
-    }
-    const nameEl = el('span', 'auth-username', name);
-    userRow.appendChild(nameEl);
-    authSection.appendChild(userRow);
-
-    const btnRow = el('div', 'auth-btn-row');
+    const linkRow = el('div', 'auth-btn-row');
     const profileBtn = el('button', 'auth-link', 'Profile');
     profileBtn.addEventListener('click', () => { playClick(); showProfile(); });
-    btnRow.appendChild(profileBtn);
+    linkRow.appendChild(profileBtn);
     const lbBtn = el('button', 'auth-link', 'Leaderboard');
     lbBtn.addEventListener('click', () => { playClick(); showLeaderboard(); });
-    btnRow.appendChild(lbBtn);
-    const outBtn = el('button', 'auth-link', 'Sign out');
-    outBtn.addEventListener('click', async () => { await signOut(); renderMenu(); });
-    btnRow.appendChild(outBtn);
-    authSection.appendChild(btnRow);
-  } else {
-    const signInLabel = el('div', 'auth-label', 'Sign in to track progress & access community');
-    authSection.appendChild(signInLabel);
-    const btnRow = el('div', 'auth-btn-row');
-    const ghBtn = el('button', 'auth-btn-oauth', '\uf09b GitHub');
-    ghBtn.style.fontFamily = 'system-ui, sans-serif';
-    ghBtn.addEventListener('click', () => signInWithGitHub());
-    btnRow.appendChild(ghBtn);
-    const gBtn = el('button', 'auth-btn-oauth', 'Google');
-    gBtn.addEventListener('click', () => signInWithGoogle());
-    btnRow.appendChild(gBtn);
-    authSection.appendChild(btnRow);
+    linkRow.appendChild(lbBtn);
+    container.appendChild(linkRow);
   }
-  container.appendChild(authSection);
 
   app.appendChild(container);
 }
@@ -1125,7 +1092,7 @@ async function showLeaderboard() {
   app.appendChild(container);
 
   try {
-    const players = await api.fetchLeaderboard();
+    const players = await api.fetchLogicLeaderboard();
     content.innerHTML = '';
 
     if (players.length === 0) {

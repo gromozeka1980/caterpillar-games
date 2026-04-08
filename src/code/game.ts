@@ -19,7 +19,7 @@ import {
   trackAnimation,
 } from '../shared/ui';
 
-type Screen = 'chooser' | 'level' | 'help' | 'community' | 'create-level' | 'leaderboard' | 'profile';
+type Screen = 'menu' | 'chooser' | 'level' | 'help' | 'community' | 'create-level' | 'leaderboard' | 'profile';
 
 interface LevelProgress {
   passed: boolean;
@@ -51,7 +51,7 @@ interface GameState {
 }
 
 const state: GameState = {
-  screen: 'chooser',
+  screen: 'menu',
   currentLevel: -1,
   currentRule: null,
   progress: loadProgress(),
@@ -163,6 +163,62 @@ async function syncProgressToServer() {
   }
 }
 
+// ——— Main Menu ———
+
+function renderMenu() {
+  clearScreen();
+  const app = document.getElementById('app')!;
+  const container = el('div', 'menu-screen');
+
+  // Back to home
+  const backBtn = el('button', 'back-btn', '\u2190 Home');
+  backBtn.style.alignSelf = 'flex-start';
+  backBtn.addEventListener('click', () => { playClick(); navigate(''); });
+  container.appendChild(backBtn);
+
+  const title = el('h1', 'game-title', 'Caterpillar Code');
+  container.appendChild(title);
+  const subtitle = el('p', 'game-subtitle', 'Write Python one-liners to crack the rules');
+  container.appendChild(subtitle);
+
+  // Animated demo caterpillar
+  const demo = el('div', 'menu-demo');
+  const anim = createAnimatedCaterpillar([0, 1, 2, 1, 0], 260, 52, 'forward', 'happy');
+  demo.appendChild(anim.canvas);
+  trackAnimation(anim);
+  container.appendChild(demo);
+
+  const btnCol = el('div', 'menu-buttons');
+
+  const playBtn = el('button', 'menu-btn menu-btn-primary', '\u25b6 Play');
+  playBtn.addEventListener('click', () => { playClick(); goToChooser(); });
+  btnCol.appendChild(playBtn);
+
+  const communityBtn = el('button', 'menu-btn', '\ud83c\udf10 Community Levels');
+  communityBtn.addEventListener('click', () => { playClick(); showCommunityBrowser(); });
+  btnCol.appendChild(communityBtn);
+
+  const helpBtn = el('button', 'menu-btn', '\u2753 How to play');
+  helpBtn.addEventListener('click', () => { playClick(); showHelp(); });
+  btnCol.appendChild(helpBtn);
+
+  container.appendChild(btnCol);
+
+  // Profile/leaderboard links (only if signed in)
+  if (isSignedIn()) {
+    const linkRow = el('div', 'auth-btn-row');
+    const profileBtn = el('button', 'auth-link', 'Profile');
+    profileBtn.addEventListener('click', () => { playClick(); showProfile(); });
+    linkRow.appendChild(profileBtn);
+    const lbBtn = el('button', 'auth-link', 'Leaderboard');
+    lbBtn.addEventListener('click', () => { playClick(); showLeaderboard(); });
+    linkRow.appendChild(lbBtn);
+    container.appendChild(linkRow);
+  }
+
+  app.appendChild(container);
+}
+
 function renderChooser() {
   clearScreen();
   const app = document.getElementById('app')!;
@@ -171,35 +227,13 @@ function renderChooser() {
   // Top bar with back button
   const topBar = el('div', 'top-bar');
   const backBtn = el('button', 'back-btn', '\u2190');
-  backBtn.addEventListener('click', () => { playClick(); navigate(''); });
+  backBtn.addEventListener('click', () => { playClick(); state.screen = 'menu'; renderMenu(); });
   topBar.appendChild(backBtn);
   const levelLabel = el('span', 'level-label', 'Choose a level');
   topBar.appendChild(levelLabel);
   container.appendChild(topBar);
 
   renderChooserPath(container, state.progress, (id) => startLevel(id));
-
-  // Bottom buttons
-  const btnRow = el('div', 'chooser-buttons');
-
-  const communityBtn = el('button', 'help-btn', '\ud83c\udf10 Community');
-  communityBtn.addEventListener('click', () => { playClick(); showCommunityBrowser(); });
-  btnRow.appendChild(communityBtn);
-
-  const helpBtn = el('button', 'help-btn', '\u2753 Help');
-  helpBtn.addEventListener('click', () => { playClick(); showHelp(); });
-  btnRow.appendChild(helpBtn);
-
-  if (isSignedIn()) {
-    const profileBtn = el('button', 'help-btn', 'Profile');
-    profileBtn.addEventListener('click', () => { playClick(); showProfile(); });
-    btnRow.appendChild(profileBtn);
-
-    const lbBtn = el('button', 'help-btn', 'Leaderboard');
-    lbBtn.addEventListener('click', () => { playClick(); showLeaderboard(); });
-    btnRow.appendChild(lbBtn);
-  }
-  container.appendChild(btnRow);
 
   // Share button (only for signed-in users with progress)
   if (isSignedIn() && state.progress.size > 0) {
@@ -398,7 +432,8 @@ function renderLevel() {
     playClick();
     if (state.isTutorial) {
       state.isTutorial = false;
-      navigate('');
+      state.screen = 'menu';
+      renderMenu();
     } else if (state.communityLevel) {
       state.communityLevel = null;
       showCommunityBrowser();
@@ -1066,7 +1101,7 @@ function showHelp() {
   const container = el('div', 'help-screen');
 
   const backBtn = el('button', 'back-btn', '\u2190 Back');
-  backBtn.addEventListener('click', () => { playClick(); navigate(''); });
+  backBtn.addEventListener('click', () => { playClick(); state.screen = 'menu'; renderMenu(); });
   container.appendChild(backBtn);
 
   const title = el('h2', 'help-title', 'How to Play');
@@ -1150,7 +1185,7 @@ async function showCommunityBrowser(sort: api.LevelSort = 'newest') {
 
   const topBar = el('div', 'top-bar');
   const backBtn = el('button', 'back-btn', '\u2190');
-  backBtn.addEventListener('click', () => { playClick(); navigate(''); });
+  backBtn.addEventListener('click', () => { playClick(); state.screen = 'menu'; renderMenu(); });
   topBar.appendChild(backBtn);
   const titleEl = el('span', 'level-label', 'Community Levels');
   topBar.appendChild(titleEl);
@@ -1213,7 +1248,7 @@ async function showCommunityBrowser(sort: api.LevelSort = 'newest') {
 // ——— Create Level ———
 
 async function showCreateLevel() {
-  if (!isSignedIn()) { navigate(''); return; }
+  if (!isSignedIn()) { renderMenu(); return; }
   clearScreen();
   state.screen = 'create-level';
   const app = document.getElementById('app')!;
@@ -1413,7 +1448,7 @@ async function startCommunityLevel(level: CommunityLevel) {
 // ——— Profile ———
 
 async function showProfile() {
-  if (!isSignedIn()) { navigate(''); return; }
+  if (!isSignedIn()) { renderMenu(); return; }
   clearScreen();
   state.screen = 'profile';
   const app = document.getElementById('app')!;
@@ -1421,7 +1456,7 @@ async function showProfile() {
 
   const topBar = el('div', 'top-bar');
   const backBtn = el('button', 'back-btn', '\u2190');
-  backBtn.addEventListener('click', () => { playClick(); navigate(''); });
+  backBtn.addEventListener('click', () => { playClick(); state.screen = 'menu'; renderMenu(); });
   topBar.appendChild(backBtn);
   topBar.appendChild(el('span', 'level-label', 'Profile'));
   container.appendChild(topBar);
@@ -1475,7 +1510,7 @@ async function showLeaderboard() {
 
   const topBar = el('div', 'top-bar');
   const backBtn = el('button', 'back-btn', '\u2190');
-  backBtn.addEventListener('click', () => { playClick(); navigate(''); });
+  backBtn.addEventListener('click', () => { playClick(); state.screen = 'menu'; renderMenu(); });
   topBar.appendChild(backBtn);
   topBar.appendChild(el('span', 'level-label', 'Leaderboard'));
   container.appendChild(topBar);
@@ -1486,7 +1521,7 @@ async function showLeaderboard() {
   app.appendChild(container);
 
   try {
-    const players = await api.fetchLeaderboard();
+    const players = await api.fetchCodeLeaderboard();
     content.innerHTML = '';
 
     if (players.length === 0) {
@@ -1567,7 +1602,8 @@ async function renderSharedProgress(userId: string) {
   const backBtn = el('button', 'back-btn', '\u2190');
   backBtn.addEventListener('click', () => {
     window.history.replaceState(null, '', window.location.pathname);
-    navigate('');
+    state.screen = 'menu';
+    renderMenu();
   });
   topBar.appendChild(backBtn);
   const label = el('span', 'level-label', 'Loading...');
@@ -1621,7 +1657,8 @@ export const codeModule: GameModule = {
         await loadProgressFromServer();
         if (state.progress.size > 0) syncProgressToServer();
       }
-      if (state.screen === 'chooser') renderChooser();
+      if (state.screen === 'menu') renderMenu();
+      else if (state.screen === 'chooser') renderChooser();
     });
 
     // Load server progress and sync local -> server on sign-in
@@ -1631,7 +1668,7 @@ export const codeModule: GameModule = {
     }
 
     if (!tryShowSharedProgress()) {
-      goToChooser();
+      renderMenu();
     }
 
     // Re-render on orientation change
@@ -1641,7 +1678,8 @@ export const codeModule: GameModule = {
       resizeTimer = window.setTimeout(() => {
         // Don't re-render while code input is focused (mobile keyboard)
         if (document.activeElement?.classList.contains('code-input')) return;
-        if (state.screen === 'chooser') renderChooser();
+        if (state.screen === 'menu') renderMenu();
+        else if (state.screen === 'chooser') renderChooser();
         else if (state.screen === 'level') renderLevel();
       }, 200);
     };

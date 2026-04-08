@@ -147,6 +147,7 @@ export async function updateUsername(username: string): Promise<void> {
 
 // ——— Leaderboard ———
 
+/** Simple leaderboard from profiles table (used as fallback) */
 export async function fetchLeaderboard(limit = 20): Promise<Profile[]> {
   const { data, error } = await db()
     .from('profiles')
@@ -156,6 +157,97 @@ export async function fetchLeaderboard(limit = 20): Promise<Profile[]> {
     .limit(limit);
   if (error) throw error;
   return data as Profile[];
+}
+
+export interface LeaderboardEntry {
+  user_id: string;
+  username: string;
+  avatar_url: string | null;
+  builtin_stars: number;
+  community_solved: number;
+}
+
+/** Code leaderboard: only code-mode stars and community solves */
+export async function fetchCodeLeaderboard(limit = 20): Promise<LeaderboardEntry[]> {
+  // Get all code completions grouped by user
+  const { data: completions, error: cErr } = await db()
+    .from('builtin_completions')
+    .select('user_id, stars')
+    .eq('game_mode', 'code');
+  if (cErr || !completions) return [];
+
+  // Aggregate stars per user
+  const userStars = new Map<string, number>();
+  for (const c of completions) {
+    userStars.set(c.user_id, (userStars.get(c.user_id) ?? 0) + c.stars);
+  }
+
+  // Get profiles for these users
+  const userIds = [...userStars.keys()];
+  if (userIds.length === 0) return [];
+
+  const { data: profiles, error: pErr } = await db()
+    .from('profiles')
+    .select('id, username, avatar_url, community_solved')
+    .in('id', userIds);
+  if (pErr || !profiles) return [];
+
+  const entries: LeaderboardEntry[] = profiles.map(p => ({
+    user_id: p.id,
+    username: p.username,
+    avatar_url: p.avatar_url,
+    builtin_stars: userStars.get(p.id) ?? 0,
+    community_solved: p.community_solved ?? 0,
+  }));
+
+  entries.sort((a, b) => b.builtin_stars - a.builtin_stars || b.community_solved - a.community_solved);
+  return entries.slice(0, limit);
+}
+
+/** Logic leaderboard: best stars per level across code+logic, all community solves */
+export async function fetchLogicLeaderboard(limit = 20): Promise<LeaderboardEntry[]> {
+  // Get ALL completions (both code and logic)
+  const { data: completions, error: cErr } = await db()
+    .from('builtin_completions')
+    .select('user_id, level_index, stars, game_mode');
+  if (cErr || !completions) return [];
+
+  // For each user+level, take best stars across modes
+  const bestStars = new Map<string, Map<number, number>>(); // user_id -> level_index -> best_stars
+  for (const c of completions) {
+    if (!bestStars.has(c.user_id)) bestStars.set(c.user_id, new Map());
+    const userMap = bestStars.get(c.user_id)!;
+    userMap.set(c.level_index, Math.max(userMap.get(c.level_index) ?? 0, c.stars));
+  }
+
+  // Sum stars per user
+  const userStars = new Map<string, number>();
+  for (const [userId, levelMap] of bestStars) {
+    let total = 0;
+    for (const stars of levelMap.values()) total += stars;
+    userStars.set(userId, total);
+  }
+
+  // Get profiles
+  const userIds = [...userStars.keys()];
+  if (userIds.length === 0) return [];
+
+  const { data: profiles, error: pErr } = await db()
+    .from('profiles')
+    .select('id, username, avatar_url, community_solved')
+    .in('id', userIds);
+  if (pErr || !profiles) return [];
+
+  const entries: LeaderboardEntry[] = profiles.map(p => ({
+    user_id: p.id,
+    username: p.username,
+    avatar_url: p.avatar_url,
+    builtin_stars: userStars.get(p.id) ?? 0,
+    community_solved: p.community_solved ?? 0,
+  }));
+
+  entries.sort((a, b) => b.builtin_stars - a.builtin_stars || b.community_solved - a.community_solved);
+  return entries.slice(0, limit);
 }
 
 // ——— Sync built-in progress ———
