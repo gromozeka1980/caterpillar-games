@@ -1,14 +1,14 @@
-const CACHE_NAME = 'caterpillar-games-v1';
+const CACHE_NAME = 'caterpillar-games-v2';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) =>
       cache.addAll([
-        '/caterpillar-games/',
-        '/caterpillar-games/index.html',
-        '/caterpillar-games/manifest.json',
-        '/caterpillar-games/icon-512.png',
+        '/',
+        '/index.html',
+        '/manifest.json',
+        '/icon-512.png',
       ]).catch(() => {})
     )
   );
