@@ -102,22 +102,25 @@ async function loadProgressFromServer() {
   if (!isSignedIn()) return;
   const user = getUser()!;
   try {
-    const completions = await api.fetchBuiltinCompletions(user.id, 'logic');
+    // Fetch both logic AND code completions — code solutions count as logic too
+    const [logicCompletions, codeCompletions] = await Promise.all([
+      api.fetchBuiltinCompletions(user.id, 'logic'),
+      api.fetchBuiltinCompletions(user.id, 'code'),
+    ]);
+    const allCompletions = [...logicCompletions, ...codeCompletions];
     let changed = false;
-    for (const c of completions) {
+    for (const c of allCompletions) {
       const existing = state.progress.get(c.level_index);
       const serverStars = c.stars;
       if (!existing || !existing.passed) {
-        // Server has progress that local doesn't
         state.progress.set(c.level_index, {
           passed: true,
-          stars: serverStars,
+          stars: Math.max(serverStars, existing?.stars ?? 0),
           attempts: 1,
           tested: 0,
         });
         changed = true;
       } else {
-        // Merge: take best of both
         const bestStars = Math.max(existing.stars, serverStars);
         if (bestStars > existing.stars) {
           state.progress.set(c.level_index, {
