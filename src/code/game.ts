@@ -1,0 +1,1658 @@
+// Caterpillar Code — write Python one-liners to capture hidden rules
+
+import { rules, type RuleFunc } from '../shared/rules';
+import { getValidInvalid, getN, type Sequence } from '../shared/utils';
+import { createAnimatedCaterpillar, createCaterpillarCanvas, COLORS, type Mood } from '../shared/caterpillar';
+import { ruleDescriptions } from '../shared/ruleDescriptions';
+import { launchConfetti } from '../shared/confetti';
+import { playClick, playPop, playValid, playInvalid, playSuccess, playWrong, playBackspace } from '../shared/sounds';
+import { initSignatures, ALL_SEQS, buildSignature, compareSignatures, isConsistentWithExamples, computeCanonicalSignature } from '../shared/signatures';
+import { evaluateExpression, isPyodideReady } from './pyodide';
+import { getStars, MAX_CODE_LENGTH, STAR_THRESHOLDS } from './starThresholds';
+import { getUser, isSignedIn, setAuthChangeCallback, type CommunityLevel } from '../shared/supabase';
+import * as api from '../shared/api';
+import { navigate, type GameModule } from '../shared/router';
+import {
+  el, toRGB, seqKey, clearScreen, destroyAnimations, resetStagger,
+  refreshLayout, getLayout, getOrCreateOverlay,
+  removeOverlay, addToHistory, renderChooserPath, renderHistoryPanels,
+  trackAnimation,
+} from '../shared/ui';
+
+type Screen = 'chooser' | 'level' | 'help' | 'community' | 'create-level' | 'leaderboard' | 'profile';
+
+interface LevelProgress {
+  passed: boolean;
+  stars: number;       // 1-3
+  bestLength: number;  // shortest passing expression length
+  bestExpression?: string; // shortest passing expression
+}
+
+interface GameState {
+  screen: Screen;
+  currentLevel: number;
+  currentRule: RuleFunc | null;
+  progress: Map<number, LevelProgress>;
+  valids: Sequence[];
+  invalids: Sequence[];
+  validHistory: Sequence[];
+  invalidHistory: Sequence[];
+  inputChain: number[];
+  codeInput: string;
+  codeError: string | null;
+  codeSubmitting: boolean;
+  testedCount: number;
+  isTutorial: boolean;
+  tutorialStep: number;
+  tutorialSeenValid: boolean;
+  tutorialSeenInvalid: boolean;
+  cheatSheetOpen: boolean;
+  communityLevel: CommunityLevel | null;
+}
+
+const state: GameState = {
+  screen: 'chooser',
+  currentLevel: -1,
+  currentRule: null,
+  progress: loadProgress(),
+  valids: [],
+  invalids: [],
+  validHistory: [],
+  invalidHistory: [],
+  inputChain: [],
+  codeInput: '',
+  codeError: null,
+  codeSubmitting: false,
+  testedCount: 0,
+  isTutorial: false,
+  tutorialStep: 0,
+  tutorialSeenValid: false,
+  tutorialSeenInvalid: false,
+  cheatSheetOpen: false,
+  communityLevel: null,
+};
+
+function loadProgress(): Map<number, LevelProgress> {
+  try {
+    const s = localStorage.getItem('caterpillar-code-progress');
+    if (s) {
+      const arr: [number, LevelProgress][] = JSON.parse(s);
+      return new Map(arr);
+    }
+  } catch { /* ignore */ }
+  return new Map();
+}
+
+function saveProgress() {
+  localStorage.setItem('caterpillar-code-progress', JSON.stringify([...state.progress.entries()]));
+}
+
+// ——— Share Progress ———
+
+function shareProgress(btn: HTMLElement) {
+  if (!isSignedIn()) return;
+  const userId = getUser()!.id;
+  const base = window.location.href.split('?')[0].split('#')[0];
+  const url = `${base}?user=${userId}`;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(url).then(() => {
+      btn.textContent = '\u2705 Link copied!';
+      setTimeout(() => { btn.textContent = '\ud83d\udcca Share progress'; }, 2000);
+    });
+  } else {
+    prompt('Copy this link to share your progress:', url);
+  }
+}
+
+// ——— Sync localStorage progress to Supabase ———
+
+async function loadProgressFromServer() {
+  if (!isSignedIn()) return;
+  const user = getUser()!;
+  try {
+    const completions = await api.fetchBuiltinCompletions(user.id);
+    let changed = false;
+    for (const c of completions) {
+      const existing = state.progress.get(c.level_index);
+      const serverStars = c.stars;
+      const serverLength = c.best_length;
+      if (!existing || !existing.passed) {
+        // Server has progress that local doesn't
+        state.progress.set(c.level_index, {
+          passed: true,
+          stars: serverStars,
+          bestLength: serverLength,
+          bestExpression: c.expression ?? undefined,
+        });
+        changed = true;
+      } else {
+        // Merge: take best of both
+        const bestStars = Math.max(existing.stars, serverStars);
+        const bestLength = Math.min(existing.bestLength ?? Infinity, serverLength || Infinity);
+        if (bestStars > existing.stars || bestLength < (existing.bestLength ?? Infinity)) {
+          state.progress.set(c.level_index, {
+            ...existing,
+            stars: bestStars,
+            bestLength: bestLength === Infinity ? existing.bestLength : bestLength,
+          });
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      saveProgress();
+    }
+  } catch { /* ignore */ }
+}
+
+async function syncProgressToServer() {
+  if (!isSignedIn()) return;
+  const completions: { level_index: number; stars: number; best_length: number; expression?: string }[] = [];
+  for (const [level, prog] of state.progress) {
+    if (prog.passed) {
+      completions.push({
+        level_index: level,
+        stars: prog.stars,
+        best_length: prog.bestLength ?? 0,
+        expression: prog.bestExpression,
+      });
+    }
+  }
+  if (completions.length > 0) {
+    await api.syncBuiltinProgress(completions).catch(() => {});
+  }
+}
+
+function renderChooser() {
+  clearScreen();
+  const app = document.getElementById('app')!;
+  const container = el('div', 'chooser-screen');
+
+  // Top bar with back button
+  const topBar = el('div', 'top-bar');
+  const backBtn = el('button', 'back-btn', '\u2190');
+  backBtn.addEventListener('click', () => { playClick(); navigate(''); });
+  topBar.appendChild(backBtn);
+  const levelLabel = el('span', 'level-label', 'Choose a level');
+  topBar.appendChild(levelLabel);
+  container.appendChild(topBar);
+
+  renderChooserPath(container, state.progress, (id) => startLevel(id));
+
+  // Bottom buttons
+  const btnRow = el('div', 'chooser-buttons');
+
+  const communityBtn = el('button', 'help-btn', '\ud83c\udf10 Community');
+  communityBtn.addEventListener('click', () => { playClick(); showCommunityBrowser(); });
+  btnRow.appendChild(communityBtn);
+
+  const helpBtn = el('button', 'help-btn', '\u2753 Help');
+  helpBtn.addEventListener('click', () => { playClick(); showHelp(); });
+  btnRow.appendChild(helpBtn);
+
+  if (isSignedIn()) {
+    const profileBtn = el('button', 'help-btn', 'Profile');
+    profileBtn.addEventListener('click', () => { playClick(); showProfile(); });
+    btnRow.appendChild(profileBtn);
+
+    const lbBtn = el('button', 'help-btn', 'Leaderboard');
+    lbBtn.addEventListener('click', () => { playClick(); showLeaderboard(); });
+    btnRow.appendChild(lbBtn);
+  }
+  container.appendChild(btnRow);
+
+  // Share button (only for signed-in users with progress)
+  if (isSignedIn() && state.progress.size > 0) {
+    const shareBtn = el('button', 'share-btn', '\ud83d\udcca Share progress');
+    shareBtn.addEventListener('click', () => { playClick(); shareProgress(shareBtn); });
+    container.appendChild(shareBtn);
+  }
+
+  app.appendChild(container);
+}
+
+// ——— Tutorial ———
+
+const TUTORIAL_RULE: RuleFunc = (seq: Sequence) => new Set(seq).size === 1;
+
+const TUTORIAL_VALID: Sequence[] = [[0,0,0], [1,1,1,1], [2,2], [3,3,3], [0,0,0,0,0], [1,1], [2,2,2,2], [3,3,3,3,3]];
+const TUTORIAL_INVALID: Sequence[] = [[0,1,0], [1,2,3], [0,0,1], [3,2,3], [1,0,1,0], [2,3,2], [0,1,2,3], [1,1,0]];
+
+interface TutorialHintDef {
+  text: string;
+  hasNext?: boolean;
+}
+
+const TUTORIAL_HINTS: TutorialHintDef[] = [
+  // 0: Look at examples
+  { text: 'These caterpillars follow a secret rule. The left ones are valid, the right ones are not. Can you spot the difference?', hasNext: true },
+  // 1: Pick a color
+  { text: 'Pick a color to start building a caterpillar.' },
+  // 2: Add more segments
+  { text: 'Add a few more segments.' },
+  // 3: Watch the face
+  { text: 'Watch the caterpillar\u2019s face \u2014 it smiles if it\u2019s valid, frowns if it\u2019s not. Try both!' },
+  // 4: Explain the + button (auto-advances on submit)
+  { text: 'Press + to save a caterpillar to your board. This helps you compare and spot the pattern.' },
+  // 5: Free exploration + code hint + cheat-sheet mention
+  { text: '' },
+  // 6: Code submission in progress — no hint
+  { text: '' },
+];
+
+function startTutorial() {
+  state.isTutorial = true;
+  state.tutorialStep = 0;
+  state.tutorialSeenValid = false;
+  state.tutorialSeenInvalid = false;
+  state.currentLevel = -1;
+  state.currentRule = TUTORIAL_RULE;
+  state.inputChain = [];
+  state.codeInput = '';
+  state.codeError = null;
+  state.testedCount = 0;
+
+  state.valids = TUTORIAL_VALID;
+  state.invalids = TUTORIAL_INVALID;
+  state.validHistory = TUTORIAL_VALID.slice(0, 3);
+  state.invalidHistory = TUTORIAL_INVALID.slice(0, 3);
+
+  state.screen = 'level';
+  renderLevel();
+  renderTutorialHint();
+}
+
+function removeTutorialHint() {
+  document.getElementById('tutorial-hint')?.remove();
+}
+
+function renderTutorialHint() {
+  removeTutorialHint();
+  if (!state.isTutorial) return;
+  const step = state.tutorialStep;
+  if (step >= TUTORIAL_HINTS.length) return;
+  const def = TUTORIAL_HINTS[step];
+
+  let text = def.text;
+  const showNext = def.hasNext ?? false;
+
+  // Step 5: dynamic text
+  if (step === 5) {
+    text = state.testedCount < 2
+      ? 'Try saving a few more caterpillars to spot the pattern.'
+      : 'When you think you know the rule, write a Python expression below. Hit \u24d8 for a quick reference on the available variables.';
+  }
+  if (!text) return;
+
+  const hint = el('div', 'tutorial-hint');
+  hint.id = 'tutorial-hint';
+
+  const textEl = el('div', 'tutorial-hint-text', text);
+  hint.appendChild(textEl);
+
+  if (showNext) {
+    const nextBtn = el('button', 'tutorial-next-btn', step === 0 ? 'Got it' : 'Continue');
+    nextBtn.addEventListener('click', () => {
+      playClick();
+      state.tutorialStep++;
+      renderTutorialHint();
+    });
+    hint.appendChild(nextBtn);
+  }
+
+  const bottom = document.getElementById('bottom-section');
+  if (bottom) {
+    bottom.prepend(hint);
+  }
+}
+
+function advanceTutorial(action: 'addColor' | 'submit' | 'startCode') {
+  if (!state.isTutorial) return;
+  const step = state.tutorialStep;
+
+  if (step === 1 && action === 'addColor') {
+    state.tutorialStep = 2;
+    renderTutorialHint();
+  } else if (step === 2 && action === 'addColor' && state.inputChain.length >= 3) {
+    state.tutorialStep = 3;
+    renderTutorialHint();
+  } else if (step === 4 && action === 'submit') {
+    state.tutorialStep = 5;
+    renderTutorialHint();
+  } else if (step === 5 && action === 'submit') {
+    renderTutorialHint();
+  } else if ((step === 4 || step === 5) && action === 'startCode') {
+    state.tutorialStep = 6;
+    removeTutorialHint();
+  }
+}
+
+function handleTutorialPass() {
+  playSuccess();
+
+  const overlay = getOrCreateOverlay();
+  const app = document.getElementById('app')!;
+  launchConfetti(app, 3000);
+
+  const msg = el('div', 'victory-text', 'You got it!');
+  overlay.appendChild(msg);
+
+  const reveal = el('div', 'rule-reveal');
+  const revealTitle = el('div', 'reveal-title', 'The rule was:');
+  reveal.appendChild(revealTitle);
+  const revealText = el('div', 'reveal-text', 'All segments must be the same color.');
+  reveal.appendChild(revealText);
+  overlay.appendChild(reveal);
+
+  const codeReveal = el('div', 'code-reveal', `Your solution: ${state.codeInput}`);
+  overlay.appendChild(codeReveal);
+
+  const readyMsg = el('div', 'tutorial-ready-msg', "You're ready for the real puzzles!");
+  overlay.appendChild(readyMsg);
+
+  const startBtn = el('button', 'next-level-btn', 'Start playing \u2192');
+  startBtn.addEventListener('click', () => {
+    removeOverlay();
+    playClick();
+    state.isTutorial = false;
+    goToChooser();
+  });
+  overlay.appendChild(startBtn);
+}
+
+// ——— Level ———
+
+function startLevel(levelId: number) {
+  state.currentLevel = levelId;
+  state.currentRule = rules[levelId];
+  state.communityLevel = null;
+  state.inputChain = [];
+  // Pre-fill with last successful solution if available
+  const prevProgress = state.progress.get(levelId);
+  state.codeInput = prevProgress?.bestExpression ?? '';
+  state.codeError = null;
+  state.codeSubmitting = false;
+  state.testedCount = 0;
+
+  const { valid, invalid } = getValidInvalid(state.currentRule);
+  state.valids = valid;
+  state.invalids = invalid;
+  state.validHistory = getN(7, valid);
+  state.invalidHistory = getN(7, invalid);
+
+  state.screen = 'level';
+  renderLevel();
+}
+
+function renderLevel() {
+  refreshLayout();
+  resetStagger();
+  clearScreen();
+  const app = document.getElementById('app')!;
+  const container = el('div', 'level-screen');
+
+  // Top bar
+  const topBar = el('div', 'top-bar');
+  const backBtn = el('button', 'back-btn', '\u2190');
+  backBtn.addEventListener('click', () => {
+    playClick();
+    if (state.isTutorial) {
+      state.isTutorial = false;
+      navigate('');
+    } else if (state.communityLevel) {
+      state.communityLevel = null;
+      showCommunityBrowser();
+    } else {
+      goToChooser();
+    }
+  });
+  topBar.appendChild(backBtn);
+  const levelLabel = el('span', 'level-label',
+    state.isTutorial ? 'Tutorial'
+    : state.communityLevel ? state.communityLevel.title
+    : `Level ${state.currentLevel + 1}`
+  );
+  topBar.appendChild(levelLabel);
+
+  container.appendChild(topBar);
+
+  // Show rule button for passed levels
+  const prog = state.progress.get(state.currentLevel);
+  if (prog?.passed) {
+    const ruleBtn = el('button', 'rule-toggle-btn', 'Show rule');
+    ruleBtn.addEventListener('click', () => {
+      if (ruleBtn.classList.contains('revealed')) {
+        ruleBtn.classList.remove('revealed');
+        ruleBtn.textContent = 'Show rule';
+      } else {
+        ruleBtn.classList.add('revealed');
+        ruleBtn.textContent = ruleDescriptions[state.currentLevel];
+      }
+    });
+    container.appendChild(ruleBtn);
+  }
+
+  // History panels
+  renderHistoryPanels(container, state.validHistory, state.invalidHistory);
+
+  // Bottom section
+  const bottomSection = el('div', 'bottom-section');
+  bottomSection.id = 'bottom-section';
+
+  container.appendChild(bottomSection);
+
+  app.appendChild(container);
+
+  renderGameInput();
+}
+
+// ——— Game Input ———
+
+
+function renderGameInput() {
+  const bottom = document.getElementById('bottom-section')!;
+  bottom.innerHTML = '';
+
+  // Single row: preview + color buttons + action buttons
+  const builderRow = el('div', 'builder-row');
+
+  const previewWrapper = el('div', 'input-preview');
+  previewWrapper.id = 'input-preview';
+  builderRow.appendChild(previewWrapper);
+  updateInputPreview();
+
+  const colorGroup = el('div', 'btn-group color-group');
+  for (let c = 0; c < 4; c++) {
+    const btn = el('button', 'color-btn');
+    btn.style.backgroundColor = toRGB(COLORS[c]);
+    btn.addEventListener('click', () => { playClick(); addColor(c); });
+    colorGroup.appendChild(btn);
+  }
+  builderRow.appendChild(colorGroup);
+
+  const actionGroup = el('div', 'btn-group action-group');
+  const bksp = el('button', 'action-btn backspace-btn', '\u232b');
+  bksp.addEventListener('click', () => { playBackspace(); backspace(); });
+  actionGroup.appendChild(bksp);
+  const okBtn = el('button', 'action-btn ok-btn', '+');
+  okBtn.title = 'Add to samples';
+  okBtn.addEventListener('click', () => submitChain());
+  actionGroup.appendChild(okBtn);
+  builderRow.appendChild(actionGroup);
+
+  bottom.appendChild(builderRow);
+
+  // ——— Code editor section ———
+  const codeSection = el('div', 'code-section');
+
+  const codeLabelRow = el('div', 'code-label-row');
+  const codeLabel = el('span', 'code-label', 'Python expression:');
+  codeLabelRow.appendChild(codeLabel);
+
+  // Cheat-sheet toggle
+  const cheatBtn = el('button', 'cheat-toggle-btn', '?');
+  cheatBtn.title = 'Show reference';
+  cheatBtn.addEventListener('click', () => {
+    state.cheatSheetOpen = !state.cheatSheetOpen;
+    const sheet = document.getElementById('cheat-sheet');
+    if (sheet) sheet.style.display = state.cheatSheetOpen ? 'block' : 'none';
+    cheatBtn.classList.toggle('active', state.cheatSheetOpen);
+  });
+  codeLabelRow.appendChild(cheatBtn);
+  codeSection.appendChild(codeLabelRow);
+
+  // Cheat-sheet panel
+  const cheatSheet = el('div', 'cheat-sheet');
+  cheatSheet.id = 'cheat-sheet';
+  cheatSheet.style.display = state.cheatSheetOpen ? 'block' : 'none';
+  // Color legend
+  const colorsRow = el('div', 'cheat-colors');
+  for (let ci = 0; ci < 4; ci++) {
+    const swatch = el('span', 'cheat-color');
+    swatch.style.background = toRGB(COLORS[ci]);
+    if (ci === 2) swatch.style.color = '#fff';
+    swatch.textContent = String(ci);
+    colorsRow.appendChild(swatch);
+  }
+  cheatSheet.appendChild(colorsRow);
+
+  const catW = 120;
+  const catH = 22;
+
+  const varsDiv = el('div', 'cheat-vars');
+
+  // c — color list: all 4 distinct colors, easy to read off
+  const cSeq = [0, 1, 2, 3];
+  const cRow = el('div', 'cheat-var-row');
+  cRow.innerHTML = '<code>c</code> \u2014 color list <span class="cheat-ex">[0, 1, 2, 3]</span>';
+  cRow.appendChild(createCaterpillarCanvas(cSeq, catW, catH, 'forward', 'neutral'));
+  varsDiv.appendChild(cRow);
+
+  // f — frequencies: repeated colors make counting obvious
+  const fSeq = [0, 0, 0, 1, 3];
+  const fRow = el('div', 'cheat-var-row');
+  fRow.innerHTML = '<code>f</code> \u2014 frequencies <span class="cheat-ex">{0:3, 1:1, 2:0, 3:1}</span>';
+  fRow.appendChild(createCaterpillarCanvas(fSeq, catW, catH, 'forward', 'neutral'));
+  varsDiv.appendChild(fRow);
+
+  // s — segments: clear runs of same color
+  const sSeq = [1, 1, 2, 2, 2, 3];
+  const sRow = el('div', 'cheat-var-row');
+  sRow.innerHTML = '<code>s</code> \u2014 segments <span class="cheat-ex">[(1,2),(2,3),(3,1)]</span>';
+  sRow.appendChild(createCaterpillarCanvas(sSeq, catW, catH, 'forward', 'neutral'));
+  varsDiv.appendChild(sRow);
+
+  cheatSheet.appendChild(varsDiv);
+
+  // Example expression with a matching caterpillar
+  const exampleDiv = el('div', 'cheat-example-row');
+  const exampleCatSeq = [0, 1, 2, 1, 0]; // 3 distinct colors — matches len(set(c))==3
+  exampleDiv.innerHTML = 'Example: <code>len(set(c))==3</code> <span class="cheat-ex">\u2014 exactly 3 distinct colors</span>';
+  exampleDiv.appendChild(createCaterpillarCanvas(exampleCatSeq, catW, catH, 'forward', 'happy'));
+  cheatSheet.appendChild(exampleDiv);
+
+  codeSection.appendChild(cheatSheet);
+
+  // Code input row
+  const codeInputRow = el('div', 'code-input-row');
+  const codeInput = el('textarea', 'code-input') as HTMLTextAreaElement;
+  codeInput.rows = 1;
+  codeInput.placeholder = 'e.g. f[0] > f[1]';
+  codeInput.maxLength = MAX_CODE_LENGTH;
+  codeInput.value = state.codeInput;
+  codeInput.spellcheck = false;
+  codeInput.autocomplete = 'off';
+  codeInput.wrap = 'soft';
+
+  const autoResize = () => {
+    codeInput.style.height = 'auto';
+    codeInput.style.height = codeInput.scrollHeight + 'px';
+  };
+
+  codeInput.addEventListener('input', () => {
+    // Strip newlines — keep it a one-liner
+    const clean = codeInput.value.replace(/\n/g, '');
+    if (clean !== codeInput.value) codeInput.value = clean;
+    state.codeInput = codeInput.value;
+    state.codeError = null;
+    updateCharCounter();
+    updateErrorDisplay();
+    autoResize();
+  });
+  codeInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (!state.codeSubmitting) submitCode();
+    }
+  });
+  codeInput.addEventListener('focus', () => {
+    setTimeout(() => {
+      codeInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 350);
+  });
+  codeInputRow.appendChild(codeInput);
+
+  const charCounter = el('span', 'char-counter');
+  charCounter.id = 'char-counter';
+  codeInputRow.appendChild(charCounter);
+  codeSection.appendChild(codeInputRow);
+
+  // Error display
+  const errorDisplay = el('div', 'code-error');
+  errorDisplay.id = 'code-error';
+  codeSection.appendChild(errorDisplay);
+
+  // Submit button
+  const submitBtn = el('button', 'code-submit-btn', '\u25b6 Check solution');
+  submitBtn.id = 'code-submit-btn';
+  submitBtn.addEventListener('click', () => submitCode());
+  codeSection.appendChild(submitBtn);
+
+  bottom.appendChild(codeSection);
+
+  updateCharCounter();
+  updateErrorDisplay();
+}
+
+function updateCharCounter() {
+  const counter = document.getElementById('char-counter');
+  if (!counter) return;
+  const len = state.codeInput.length;
+  counter.textContent = `${len} / ${MAX_CODE_LENGTH}`;
+  counter.classList.toggle('near-limit', len > MAX_CODE_LENGTH * 0.85);
+  counter.classList.toggle('at-limit', len >= MAX_CODE_LENGTH);
+}
+
+function updateErrorDisplay() {
+  const errEl = document.getElementById('code-error');
+  if (!errEl) return;
+  if (state.codeError) {
+    errEl.innerHTML = '';
+    errEl.textContent = state.codeError;
+    errEl.style.display = 'flex';
+  } else {
+    errEl.innerHTML = '';
+    errEl.style.display = 'none';
+  }
+}
+
+// ——— Toast notification ———
+
+function showToast(text: string, duration = 2000) {
+  const existing = document.getElementById('toast');
+  if (existing) existing.remove();
+
+  const toast = el('div', 'toast', text);
+  toast.id = 'toast';
+  document.getElementById('app')!.appendChild(toast);
+  setTimeout(() => toast.classList.add('toast-visible'), 10);
+  setTimeout(() => {
+    toast.classList.remove('toast-visible');
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
+}
+
+// ——— Code Submission ———
+
+async function submitCode() {
+  if (state.codeSubmitting) return;
+  const expr = state.codeInput.trim();
+  if (!expr) {
+    state.codeError = 'Enter a Python expression';
+    updateErrorDisplay();
+    return;
+  }
+  if (expr.length > MAX_CODE_LENGTH) {
+    state.codeError = `Expression too long (${expr.length} > ${MAX_CODE_LENGTH})`;
+    updateErrorDisplay();
+    return;
+  }
+
+  state.codeSubmitting = true;
+  state.codeError = null;
+  updateErrorDisplay();
+
+  const submitBtn = document.getElementById('code-submit-btn');
+  if (submitBtn) {
+    submitBtn.textContent = isPyodideReady() ? '\u23f3 Checking...' : '\u23f3 Loading Python...';
+    submitBtn.classList.add('submitting');
+  }
+
+  try {
+    // Determine which sequences to evaluate against
+    let seqs: number[][];
+    let ruleResults: boolean[];
+
+    if (state.isTutorial) {
+      // Tutorial: evaluate against tutorial valid+invalid sets
+      seqs = [...TUTORIAL_VALID, ...TUTORIAL_INVALID];
+      ruleResults = seqs.map(s => TUTORIAL_RULE(s));
+    } else {
+      // Real level: evaluate against ALL sequences
+      seqs = ALL_SEQS;
+      ruleResults = ALL_SEQS.map(s => state.currentRule!(s));
+    }
+
+    const evalResult = await evaluateExpression(expr, seqs);
+
+    // If ALL caterpillars threw exceptions — show error
+    if (evalResult.errorCount === seqs.length) {
+      const msg = evalResult.errorMessage || 'Runtime error';
+      showErrorWithCaterpillar(
+        msg,
+        seqs[evalResult.firstErrorIndex],
+      );
+      playWrong();
+      return;
+    }
+
+    // If SOME caterpillars threw exceptions — show where
+    if (evalResult.errorCount > 0) {
+      const errSeq = seqs[evalResult.firstErrorIndex];
+      const msg = evalResult.errorMessage || 'Runtime error';
+      showErrorWithCaterpillar(
+        `${msg} (on ${evalResult.errorCount} caterpillar${evalResult.errorCount > 1 ? 's' : ''})`,
+        errSeq,
+      );
+      playWrong();
+      return;
+    }
+
+    const playerResults = evalResult.results as boolean[];
+
+    // Warn if expression is trivially always-true or always-false
+    const allTrue = playerResults.every(r => r);
+    const allFalse = playerResults.every(r => !r);
+    if (allTrue || allFalse) {
+      state.codeError = allTrue
+        ? 'Your expression is True for every caterpillar — probably a logic error (e.g. missing c== before a list?)'
+        : 'Your expression is False for every caterpillar — check your logic';
+      updateErrorDisplay();
+      playWrong();
+      return;
+    }
+
+    const playerSig = buildSignature(playerResults);
+    const ruleSig = buildSignature(ruleResults);
+
+    if (compareSignatures(playerSig, ruleSig)) {
+      // Correct!
+      state.codeSubmitting = false;
+      if (state.isTutorial) {
+        handleTutorialPass();
+      } else {
+        handlePass();
+      }
+      return; // Don't run finally — screen has changed
+    } else {
+      // Wrong — provide feedback
+      handleWrongSubmission(playerResults, ruleResults, seqs);
+    }
+  } catch (err: unknown) {
+    // Extract last line of traceback (e.g. "SyntaxError: invalid syntax")
+    const raw = err instanceof Error ? err.message : String(err);
+    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+    const lastLine = lines[lines.length - 1] || 'Syntax error';
+    // Keep only "ErrorType: message", strip module paths
+    const match = lastLine.match(/^(\w+Error):\s*(.*)/);
+    state.codeError = match ? `${match[1]}: ${match[2]}` : 'Syntax error';
+    updateErrorDisplay();
+    playWrong();
+  }
+  state.codeSubmitting = false;
+  const btn = document.getElementById('code-submit-btn');
+  if (btn) {
+    btn.textContent = '\u25b6 Check solution';
+    btn.classList.remove('submitting');
+  }
+}
+
+function handleWrongSubmission(playerResults: boolean[], ruleResults: boolean[], seqs: number[][]) {
+  // Check if consistent with visible examples first
+  const consistent = isConsistentWithExamples(playerResults, state.validHistory, state.invalidHistory);
+
+  if (consistent) {
+    showToast('Nice hypothesis!');
+    playPop();
+  } else {
+    playWrong();
+  }
+
+  // Find first mismatch
+  let mismatchIdx = -1;
+  for (let i = 0; i < playerResults.length; i++) {
+    if (playerResults[i] !== ruleResults[i]) {
+      mismatchIdx = i;
+      break;
+    }
+  }
+
+  if (mismatchIdx === -1) return; // shouldn't happen
+
+  const counterexample = seqs[mismatchIdx];
+  const isValid = ruleResults[mismatchIdx]; // what the rule says
+  const key = seqKey(counterexample);
+
+  // Check if already in history
+  const historyList = isValid ? state.validHistory : state.invalidHistory;
+  const listId = isValid ? 'valid-list' : 'invalid-list';
+  const existingIdx = historyList.findIndex(s => seqKey(s) === key);
+
+  if (existingIdx !== -1) {
+    // Already visible — highlight it
+    const listEl = document.getElementById(listId);
+    if (listEl) {
+      const items = listEl.querySelectorAll('.caterpillar-item');
+      const item = items[existingIdx] as HTMLElement | undefined;
+      if (item) {
+        item.classList.add('highlight-flash');
+        setTimeout(() => item.classList.remove('highlight-flash'), 1500);
+      }
+    }
+  } else {
+    // Not in history — add it
+    if (isValid) {
+      addToHistory(state.validHistory, counterexample, 'valid-list', 'forward', 'happy');
+    } else {
+      addToHistory(state.invalidHistory, counterexample, 'invalid-list', 'forward', 'sad');
+    }
+  }
+
+  // Show counterexample inline in error area
+  const playerSays = playerResults[mismatchIdx] ? 'valid' : 'invalid';
+  const actualIs = isValid ? 'valid' : 'invalid';
+  showErrorWithCaterpillar(
+    `Your code says "${playerSays}" \u2014 but it's ${actualIs}`,
+    counterexample,
+    isValid ? 'happy' : 'sad',
+  );
+}
+
+/** Show an error message with an inline caterpillar rendered next to it */
+function showErrorWithCaterpillar(message: string, seq: number[], mood: Mood = 'neutral') {
+  const errEl = document.getElementById('code-error');
+  if (!errEl) return;
+
+  errEl.innerHTML = '';
+  errEl.style.display = 'flex';
+
+  const textSpan = el('span', undefined, message);
+  errEl.appendChild(textSpan);
+
+  const canvas = createCaterpillarCanvas(seq, 100, 20, 'forward', mood);
+  canvas.classList.add('error-caterpillar');
+  errEl.appendChild(canvas);
+}
+
+function handlePass() {
+  const codeLen = state.codeInput.trim().length;
+  const isCommunity = state.communityLevel !== null;
+
+  // Save progress for built-in levels
+  if (!isCommunity) {
+    const stars = getStars(state.currentLevel, codeLen);
+    const existing = state.progress.get(state.currentLevel);
+    const bestStars = Math.max(existing?.stars ?? 0, stars);
+    const bestLength = Math.min(existing?.bestLength ?? Infinity, codeLen);
+
+    const bestExpr = codeLen <= (existing?.bestLength ?? Infinity)
+      ? state.codeInput.trim()
+      : existing?.bestExpression;
+    state.progress.set(state.currentLevel, {
+      passed: true,
+      stars: bestStars,
+      bestLength,
+      bestExpression: bestExpr,
+    });
+    saveProgress();
+    // Sync to server
+    if (isSignedIn()) {
+      api.syncBuiltinProgress([{
+        level_index: state.currentLevel,
+        stars: bestStars,
+        best_length: bestLength,
+        expression: bestExpr,
+      }]).catch(() => {});
+    }
+  }
+
+  // Submit solution for community levels
+  if (isCommunity && isSignedIn()) {
+    api.submitSolution(state.communityLevel!.id, state.codeInput.trim(), codeLen).catch(() => {});
+  }
+
+  playSuccess();
+
+  const overlay = getOrCreateOverlay();
+  const app = document.getElementById('app')!;
+  launchConfetti(app, 3000);
+
+  if (!isCommunity) {
+    const stars = getStars(state.currentLevel, codeLen);
+    const starsEl = el('div', 'victory-stars');
+    for (let s = 0; s < 3; s++) {
+      const star = el('span', s < stars ? 'vstar filled' : 'vstar empty');
+      star.textContent = '\u2605';
+      star.style.animationDelay = `${s * 0.2}s`;
+      starsEl.appendChild(star);
+    }
+    overlay.appendChild(starsEl);
+  }
+
+  const msg = el('div', 'victory-text', 'Level Complete!');
+  overlay.appendChild(msg);
+
+  // Rule reveal
+  const reveal = el('div', 'rule-reveal');
+  const revealTitle = el('div', 'reveal-title', 'The rule was:');
+  reveal.appendChild(revealTitle);
+  const revealText = el('div', 'reveal-text');
+  revealText.textContent = isCommunity
+    ? state.communityLevel!.expression
+    : ruleDescriptions[state.currentLevel];
+  reveal.appendChild(revealText);
+  overlay.appendChild(reveal);
+
+  const codeReveal = el('div', 'code-reveal');
+  const codeEl = document.createElement('code');
+  codeEl.textContent = state.codeInput.trim();
+  codeReveal.append('Your solution: ', codeEl, ` (${codeLen} chars)`);
+  overlay.appendChild(codeReveal);
+
+  if (!isCommunity) {
+    const [threeMax, twoMax] = STAR_THRESHOLDS[state.currentLevel];
+    const thresholdHint = el('div', 'threshold-hint');
+    thresholdHint.innerHTML = `\u2605\u2605\u2605 \u2264 ${threeMax} chars &nbsp;\u00b7&nbsp; \u2605\u2605 \u2264 ${twoMax} chars`;
+    overlay.appendChild(thresholdHint);
+  }
+
+  // Rating buttons for community levels
+  if (isCommunity && isSignedIn()) {
+    const ratingRow = el('div', 'rating-row');
+    ratingRow.appendChild(el('span', 'rating-label', 'Rate this level:'));
+    const upBtn = el('button', 'rating-btn rating-up', '\u25b2');
+    upBtn.addEventListener('click', () => {
+      api.rateLevel(state.communityLevel!.id, 1).catch(() => {});
+      upBtn.classList.add('rating-selected');
+      downBtn.classList.remove('rating-selected');
+    });
+    ratingRow.appendChild(upBtn);
+    const downBtn = el('button', 'rating-btn rating-down', '\u25bc');
+    downBtn.addEventListener('click', () => {
+      api.rateLevel(state.communityLevel!.id, -1).catch(() => {});
+      downBtn.classList.add('rating-selected');
+      upBtn.classList.remove('rating-selected');
+    });
+    ratingRow.appendChild(downBtn);
+    overlay.appendChild(ratingRow);
+  }
+
+  const btnRow = el('div', 'victory-buttons');
+
+  if (!isCommunity) {
+    const stars = getStars(state.currentLevel, codeLen);
+    if (stars < 3) {
+      const retryBtn = el('button', 'next-level-btn victory-retry-btn', '\u21bb Try again');
+      retryBtn.addEventListener('click', () => { removeOverlay(); playClick(); startLevel(state.currentLevel); });
+      btnRow.appendChild(retryBtn);
+    }
+  }
+
+  const nextBtn = el('button', 'next-level-btn');
+  if (isCommunity) {
+    nextBtn.textContent = 'Back to Levels';
+    nextBtn.addEventListener('click', () => { removeOverlay(); playClick(); state.communityLevel = null; showCommunityBrowser(); });
+  } else if (state.currentLevel < 19) {
+    nextBtn.textContent = 'Next Level \u2192';
+    nextBtn.addEventListener('click', () => { removeOverlay(); playClick(); startLevel(state.currentLevel + 1); });
+  } else {
+    nextBtn.textContent = 'Back to Levels';
+    nextBtn.addEventListener('click', () => { removeOverlay(); playClick(); goToChooser(); });
+  }
+  btnRow.appendChild(nextBtn);
+
+  overlay.appendChild(btnRow);
+}
+
+let previewAnim: { destroy: () => void } | null = null;
+
+function updateInputPreview() {
+  const wrapper = document.getElementById('input-preview');
+  if (!wrapper) return;
+
+  if (previewAnim) {
+    previewAnim.destroy();
+    previewAnim = null;
+  }
+  wrapper.innerHTML = '';
+  wrapper.classList.remove('preview-valid', 'preview-invalid');
+
+  if (state.inputChain.length === 0) return;
+
+  let mood: Mood = 'sad';
+  const isValid = state.currentRule && state.currentRule(state.inputChain);
+  if (isValid) {
+    mood = 'happy';
+  }
+
+  wrapper.classList.add(isValid ? 'preview-valid' : 'preview-invalid');
+
+  // Track seen expressions for tutorial
+  if (state.isTutorial && state.tutorialStep === 3) {
+    if (isValid) state.tutorialSeenValid = true;
+    else state.tutorialSeenInvalid = true;
+    if (state.tutorialSeenValid && state.tutorialSeenInvalid) {
+      state.tutorialStep = 4;
+      renderTutorialHint();
+    }
+  }
+
+  const layout = getLayout();
+  const anim = createAnimatedCaterpillar(state.inputChain, layout.previewW, layout.previewH, 'forward', mood);
+  previewAnim = anim;
+  wrapper.appendChild(anim.canvas);
+}
+
+
+function addColor(c: number) {
+  if (state.inputChain.length >= 7) return;
+  state.inputChain = [...state.inputChain, c];
+  updateInputPreview();
+  advanceTutorial('addColor');
+}
+
+function backspace() {
+  state.inputChain = state.inputChain.slice(0, -1);
+  updateInputPreview();
+}
+
+function submitChain() {
+  if (state.inputChain.length === 0) return;
+  const chain = [...state.inputChain];
+  const key = seqKey(chain);
+  const isValid = state.currentRule!(chain);
+
+  // Don't add duplicates
+  const history = isValid ? state.validHistory : state.invalidHistory;
+  if (history.some(s => seqKey(s) === key)) {
+    state.inputChain = [];
+    updateInputPreview();
+    return;
+  }
+
+  playPop();
+  state.testedCount++;
+
+  if (isValid) {
+    playValid();
+    addToHistory(state.validHistory, chain, 'valid-list', 'forward', 'happy');
+  } else {
+    playInvalid();
+    addToHistory(state.invalidHistory, chain, 'invalid-list', 'forward', 'sad');
+  }
+
+  state.inputChain = [];
+  updateInputPreview();
+  advanceTutorial('submit');
+}
+
+// ——— Help ———
+
+function showHelp() {
+  clearScreen();
+  const app = document.getElementById('app')!;
+  state.screen = 'help';
+
+  const container = el('div', 'help-screen');
+
+  const backBtn = el('button', 'back-btn', '\u2190 Back');
+  backBtn.addEventListener('click', () => { playClick(); navigate(''); });
+  container.appendChild(backBtn);
+
+  const title = el('h2', 'help-title', 'How to Play');
+  container.appendChild(title);
+
+  // Animated demo caterpillar
+  const demo = el('div', 'help-demo');
+  const anim = createAnimatedCaterpillar([0, 1, 2, 1, 0], 280, 56, 'forward', 'happy');
+  demo.appendChild(anim.canvas);
+  trackAnimation(anim);
+  container.appendChild(demo);
+
+  const text = el('div', 'help-text');
+  text.innerHTML = `
+    <p>Each level hides a secret <strong>rule</strong> about caterpillar color patterns. Your goal: figure out the rule and express it in Python!</p>
+    <p>You start with examples: caterpillars on the <span class="hl-valid">left are valid</span> (match the rule) and on the <span class="hl-invalid">right are invalid</span> (don't match).</p>
+    <p>Build your own caterpillars to test hypotheses. Watch the face:</p>
+    <ul>
+      <li><strong>Smiles</strong> = valid</li>
+      <li><strong>Frowns</strong> = invalid</li>
+    </ul>
+    <p>Press <strong>+</strong> to save a caterpillar to your board for comparison.</p>
+    <p>When you're confident, write a <strong>Python boolean expression</strong> that captures the rule. You have three variables:</p>
+    <ul>
+      <li><code>c</code> \u2014 color list, e.g. <code>[0, 1, 1, 2, 3]</code></li>
+      <li><code>f</code> \u2014 color frequencies, e.g. <code>{0:1, 1:2, 2:1, 3:1}</code></li>
+      <li><code>s</code> \u2014 run-length segments, e.g. <code>[(0,1),(1,2),(2,1),(3,1)]</code></li>
+    </ul>
+    <p>Your expression must return <code>True</code> for valid caterpillars and <code>False</code> for invalid ones.</p>
+    <p>Earn up to <strong>3 stars</strong> based on how short your expression is \u2014 the shorter, the better!</p>
+  `;
+  container.appendChild(text);
+
+  // Worked example
+  const exampleSection = el('div', 'help-example');
+  const exTitle = el('div', 'help-example-title', 'Example');
+  exampleSection.appendChild(exTitle);
+
+  const exText = el('div', 'help-example-text');
+  exText.innerHTML = 'Suppose the rule is <em>"exactly 3 distinct colors"</em>. These caterpillars would be <span class="hl-valid">valid</span>:';
+  exampleSection.appendChild(exText);
+
+  const validRow = el('div', 'help-example-cats');
+  validRow.appendChild(createCaterpillarCanvas([0, 1, 2], 110, 22, 'forward', 'happy'));
+  validRow.appendChild(createCaterpillarCanvas([3, 0, 3, 1, 0], 110, 22, 'forward', 'happy'));
+  exampleSection.appendChild(validRow);
+
+  const exText2 = el('div', 'help-example-text');
+  exText2.innerHTML = 'And these would be <span class="hl-invalid">invalid</span>:';
+  exampleSection.appendChild(exText2);
+
+  const invalidRow = el('div', 'help-example-cats');
+  invalidRow.appendChild(createCaterpillarCanvas([0, 0, 1], 110, 22, 'forward', 'sad'));
+  invalidRow.appendChild(createCaterpillarCanvas([0, 1, 2, 3], 110, 22, 'forward', 'sad'));
+  exampleSection.appendChild(invalidRow);
+
+  const exSolution = el('div', 'help-example-text');
+  exSolution.innerHTML = 'The winning expression: <code>len(set(c))==3</code>';
+  exampleSection.appendChild(exSolution);
+
+  container.appendChild(exampleSection);
+
+  const inspired = el('p', 'help-inspired');
+  inspired.innerHTML = 'Inspired by <em>Zendo</em> and <em>Eleusis</em> \u2014 classic inductive reasoning games.';
+  container.appendChild(inspired);
+
+  const tryBtn = el('button', 'menu-btn menu-btn-primary help-try-btn', '\ud83c\udf93 Try the tutorial');
+  tryBtn.addEventListener('click', () => { playClick(); startTutorial(); });
+  container.appendChild(tryBtn);
+
+  app.appendChild(container);
+}
+
+// ——— Community Browser ———
+
+async function showCommunityBrowser(sort: api.LevelSort = 'newest') {
+  clearScreen();
+  state.screen = 'community';
+  const app = document.getElementById('app')!;
+  const container = el('div', 'community-screen');
+
+  const topBar = el('div', 'top-bar');
+  const backBtn = el('button', 'back-btn', '\u2190');
+  backBtn.addEventListener('click', () => { playClick(); navigate(''); });
+  topBar.appendChild(backBtn);
+  const titleEl = el('span', 'level-label', 'Community Levels');
+  topBar.appendChild(titleEl);
+
+  if (isSignedIn()) {
+    const createBtn = el('button', 'create-level-top-btn', '+ Create');
+    createBtn.addEventListener('click', () => { playClick(); showCreateLevel(); });
+    topBar.appendChild(createBtn);
+  }
+  container.appendChild(topBar);
+
+  // Sort tabs
+  const tabs = el('div', 'sort-tabs');
+  const sorts: { key: api.LevelSort; label: string }[] = [
+    { key: 'newest', label: 'Newest' },
+    { key: 'top', label: 'Top Rated' },
+    { key: 'popular', label: 'Most Played' },
+  ];
+  for (const s of sorts) {
+    const tab = el('button', `sort-tab ${s.key === sort ? 'sort-tab-active' : ''}`, s.label);
+    tab.addEventListener('click', () => { playClick(); showCommunityBrowser(s.key); });
+    tabs.appendChild(tab);
+  }
+  container.appendChild(tabs);
+
+  // Level list
+  const listEl = el('div', 'level-list');
+  const loading = el('div', 'loading-text', 'Loading...');
+  listEl.appendChild(loading);
+  container.appendChild(listEl);
+  app.appendChild(container);
+
+  try {
+    const levels = await api.fetchLevels(sort);
+    listEl.innerHTML = '';
+    if (levels.length === 0) {
+      listEl.appendChild(el('div', 'empty-text', 'No levels yet. Be the first to create one!'));
+      return;
+    }
+    for (const level of levels) {
+      const card = el('div', 'level-card');
+      card.addEventListener('click', () => { playClick(); startCommunityLevel(level); });
+
+      const titleRow = el('div', 'level-card-title', level.title);
+      card.appendChild(titleRow);
+
+      const metaRow = el('div', 'level-card-meta');
+      const author = (level.author as any)?.username || 'unknown';
+      metaRow.textContent = `by ${author} \u00b7 \u25b2${level.upvotes} \u00b7 \u25b6${level.play_count} plays \u00b7 ${level.solve_count} solved`;
+      card.appendChild(metaRow);
+
+      listEl.appendChild(card);
+    }
+  } catch {
+    listEl.innerHTML = '';
+    listEl.appendChild(el('div', 'empty-text', 'Failed to load levels'));
+  }
+}
+
+// ——— Create Level ———
+
+async function showCreateLevel() {
+  if (!isSignedIn()) { navigate(''); return; }
+  clearScreen();
+  state.screen = 'create-level';
+  const app = document.getElementById('app')!;
+  const container = el('div', 'create-level-screen');
+
+  const topBar = el('div', 'top-bar');
+  const backBtn = el('button', 'back-btn', '\u2190');
+  backBtn.addEventListener('click', () => { playClick(); showCommunityBrowser(); });
+  topBar.appendChild(backBtn);
+  topBar.appendChild(el('span', 'level-label', 'Create Level'));
+  container.appendChild(topBar);
+
+  const form = el('div', 'create-form');
+
+  // Expression (the rule)
+  const exprLabel = el('div', 'create-label', 'Rule expression (c, f, s)');
+  form.appendChild(exprLabel);
+  const exprInput = el('textarea', 'code-input create-expr') as HTMLTextAreaElement;
+  exprInput.rows = 1;
+  exprInput.placeholder = 'e.g. f[0] + f[3] == 5';
+  exprInput.maxLength = MAX_CODE_LENGTH;
+  exprInput.spellcheck = false;
+  exprInput.wrap = 'soft';
+  exprInput.addEventListener('input', () => {
+    exprInput.value = exprInput.value.replace(/\n/g, '');
+    const autoResize = () => { exprInput.style.height = 'auto'; exprInput.style.height = exprInput.scrollHeight + 'px'; };
+    autoResize();
+  });
+  form.appendChild(exprInput);
+
+  // Preview area
+  const previewArea = el('div', 'create-preview');
+  previewArea.id = 'create-preview';
+  form.appendChild(previewArea);
+
+  // Error
+  const errorEl = el('div', 'code-error');
+  errorEl.id = 'create-error';
+  form.appendChild(errorEl);
+
+  // Buttons
+  let previewedResults: boolean[] | null = null;
+  let previewedValidCount = 0;
+
+  const btnRow = el('div', 'create-btn-row');
+  const previewBtn = el('button', 'menu-btn', '\ud83d\udd0d Preview');
+  previewBtn.addEventListener('click', async () => {
+    const expr = exprInput.value.trim();
+    const preview = document.getElementById('create-preview')!;
+    const error = document.getElementById('create-error')!;
+    error.style.display = 'none';
+    preview.innerHTML = '<div class="loading-text">Evaluating...</div>';
+
+    try {
+      const evalResult = await evaluateExpression(expr, ALL_SEQS);
+      if (evalResult.errorCount === ALL_SEQS.length) {
+        error.textContent = evalResult.errorMessage || 'Expression errors on all caterpillars';
+        error.style.display = 'flex';
+        preview.innerHTML = '';
+        return;
+      }
+      if (evalResult.errorCount > 0) {
+        error.textContent = `Expression errors on ${evalResult.errorCount} caterpillars: ${evalResult.errorMessage}`;
+        error.style.display = 'flex';
+        preview.innerHTML = '';
+        return;
+      }
+      const results = evalResult.results as boolean[];
+      const validCount = results.filter(r => r).length;
+      const ratio = validCount / ALL_SEQS.length;
+      if (ratio < 0.05 || ratio > 0.95) {
+        error.textContent = `Too ${ratio < 0.05 ? 'few' : 'many'} valid caterpillars (${validCount}/${ALL_SEQS.length}). Make the rule more balanced.`;
+        error.style.display = 'flex';
+        preview.innerHTML = '';
+        return;
+      }
+
+      preview.innerHTML = `<div class="create-stats">${validCount} valid / ${ALL_SEQS.length - validCount} invalid</div>`;
+
+      previewedResults = results;
+      previewedValidCount = validCount;
+      publishBtn.style.display = 'block';
+    } catch {
+      error.textContent = 'Syntax error';
+      error.style.display = 'flex';
+      preview.innerHTML = '';
+    }
+  });
+  btnRow.appendChild(previewBtn);
+
+  const publishBtn = el('button', 'menu-btn menu-btn-primary', '\ud83d\ude80 Publish');
+  publishBtn.style.display = 'none';
+  publishBtn.addEventListener('click', async () => {
+    const expr = exprInput.value.trim();
+    const error = document.getElementById('create-error')!;
+
+    if (!previewedResults) {
+      error.textContent = 'Preview the rule first';
+      error.style.display = 'flex';
+      return;
+    }
+
+    const signature = buildSignature(previewedResults);
+    const canonicalSig = computeCanonicalSignature(previewedResults);
+
+    // Check duplicate
+    const dup = await api.checkDuplicate(canonicalSig);
+    if (dup) {
+      error.textContent = 'A level with this rule already exists';
+      error.style.display = 'flex';
+      return;
+    }
+
+    publishBtn.textContent = 'Publishing...';
+    publishBtn.classList.add('submitting');
+
+    try {
+      // Auto-generate title from username
+      const user = getUser();
+      const username = user?.user_metadata?.user_name || user?.user_metadata?.name || 'anon';
+      const levelNum = (await api.fetchMyLevelCount()) + 1;
+      const title = `${username} #${levelNum}`;
+
+      await api.createLevel({
+        title,
+        expression: expr,
+        signature,
+        canonical_signature: canonicalSig,
+        valid_count: previewedValidCount,
+        author_best_length: expr.length, // author's expression is also a solution
+      });
+      showCommunityBrowser();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to publish';
+      error.textContent = msg;
+      error.style.display = 'flex';
+      publishBtn.textContent = '\ud83d\ude80 Publish';
+      publishBtn.classList.remove('submitting');
+    }
+  });
+  btnRow.appendChild(publishBtn);
+
+  form.appendChild(btnRow);
+  container.appendChild(form);
+  app.appendChild(container);
+}
+
+// ——— Community Level Play ———
+
+async function startCommunityLevel(level: CommunityLevel) {
+  // Show loading screen immediately
+  clearScreen();
+  const app = document.getElementById('app')!;
+  const loadingScreen = el('div', 'menu-screen');
+  loadingScreen.appendChild(el('div', 'loading-text', 'Loading level...'));
+  app.appendChild(loadingScreen);
+
+  state.communityLevel = level;
+  state.currentLevel = -1;
+  state.inputChain = [];
+  state.codeError = null;
+
+  // Pre-fill with previous solution if available
+  let prevExpr = '';
+  if (isSignedIn()) {
+    try {
+      const prevSolution = await api.fetchMySolution(level.id);
+      if (prevSolution) prevExpr = prevSolution.expression;
+    } catch { /* ignore */ }
+  }
+  state.codeInput = prevExpr;
+  state.codeSubmitting = false;
+  state.testedCount = 0;
+
+  // Evaluate the level's expression to get the rule
+  const evalResult = await evaluateExpression(level.expression, ALL_SEQS);
+  const resultMap = new Map<string, boolean>();
+  ALL_SEQS.forEach((seq, i) => {
+    resultMap.set(seq.join(','), evalResult.results[i] ?? false);
+  });
+
+  state.currentRule = (seq: number[]) => resultMap.get(seq.join(',')) ?? false;
+
+  const { valid, invalid } = getValidInvalid(state.currentRule);
+  state.valids = valid;
+  state.invalids = invalid;
+  state.validHistory = getN(7, valid);
+  state.invalidHistory = getN(7, invalid);
+
+  // Increment play count
+  api.incrementPlayCount(level.id).catch(() => {});
+
+  state.screen = 'level';
+  renderLevel();
+}
+
+// ——— Profile ———
+
+async function showProfile() {
+  if (!isSignedIn()) { navigate(''); return; }
+  clearScreen();
+  state.screen = 'profile';
+  const app = document.getElementById('app')!;
+  const container = el('div', 'profile-screen');
+
+  const topBar = el('div', 'top-bar');
+  const backBtn = el('button', 'back-btn', '\u2190');
+  backBtn.addEventListener('click', () => { playClick(); navigate(''); });
+  topBar.appendChild(backBtn);
+  topBar.appendChild(el('span', 'level-label', 'Profile'));
+  container.appendChild(topBar);
+
+  const content = el('div', 'profile-content');
+  content.appendChild(el('div', 'loading-text', 'Loading...'));
+  container.appendChild(content);
+  app.appendChild(container);
+
+  try {
+    const user = getUser()!;
+    const profile = await api.fetchProfile(user.id);
+    content.innerHTML = '';
+
+    if (!profile) {
+      content.appendChild(el('div', 'empty-text', 'Profile not found'));
+      return;
+    }
+
+    const header = el('div', 'profile-header');
+    if (profile.avatar_url) {
+      const img = document.createElement('img');
+      img.src = profile.avatar_url;
+      img.className = 'profile-avatar';
+      header.appendChild(img);
+    }
+    header.appendChild(el('div', 'profile-name', profile.username));
+    content.appendChild(header);
+
+    const stats = el('div', 'profile-stats');
+    stats.innerHTML = `
+      <div class="stat-item"><div class="stat-value">${profile.builtin_solved}</div><div class="stat-label">Built-in solved</div></div>
+      <div class="stat-item"><div class="stat-value">${profile.builtin_stars} \u2605</div><div class="stat-label">Stars</div></div>
+      <div class="stat-item"><div class="stat-value">${profile.community_solved}</div><div class="stat-label">Community solved</div></div>
+      <div class="stat-item"><div class="stat-value">${profile.levels_created}</div><div class="stat-label">Levels created</div></div>
+    `;
+    content.appendChild(stats);
+  } catch {
+    content.innerHTML = '';
+    content.appendChild(el('div', 'empty-text', 'Failed to load profile'));
+  }
+}
+
+// ——— Leaderboard ———
+
+async function showLeaderboard() {
+  clearScreen();
+  state.screen = 'leaderboard';
+  const app = document.getElementById('app')!;
+  const container = el('div', 'leaderboard-screen');
+
+  const topBar = el('div', 'top-bar');
+  const backBtn = el('button', 'back-btn', '\u2190');
+  backBtn.addEventListener('click', () => { playClick(); navigate(''); });
+  topBar.appendChild(backBtn);
+  topBar.appendChild(el('span', 'level-label', 'Leaderboard'));
+  container.appendChild(topBar);
+
+  const content = el('div', 'leaderboard-content');
+  content.appendChild(el('div', 'loading-text', 'Loading...'));
+  container.appendChild(content);
+  app.appendChild(container);
+
+  try {
+    const players = await api.fetchLeaderboard();
+    content.innerHTML = '';
+
+    if (players.length === 0) {
+      content.appendChild(el('div', 'empty-text', 'No players yet'));
+      return;
+    }
+
+    // Column headers
+    const header = el('div', 'lb-row lb-header');
+    header.appendChild(el('span', 'lb-rank', ''));
+    header.appendChild(el('span', '')); // avatar spacer
+    header.appendChild(el('span', 'lb-name', 'Player'));
+    header.appendChild(el('span', 'lb-stars', 'Campaign'));
+    header.appendChild(el('span', 'lb-community', 'Community'));
+    content.appendChild(header);
+
+    for (let i = 0; i < players.length; i++) {
+      const p = players[i];
+      const row = el('div', 'lb-row');
+
+      const rank = el('span', 'lb-rank', `#${i + 1}`);
+      row.appendChild(rank);
+
+      if (p.avatar_url) {
+        const img = document.createElement('img');
+        img.src = p.avatar_url;
+        img.className = 'lb-avatar';
+        row.appendChild(img);
+      } else {
+        row.appendChild(el('span', '')); // avatar placeholder
+      }
+
+      const name = el('span', 'lb-name', p.username);
+      row.appendChild(name);
+
+      const stars = el('span', 'lb-stars', `${p.builtin_stars} \u2605`);
+      stars.title = 'Campaign stars (built-in levels)';
+      row.appendChild(stars);
+
+      const community = el('span', 'lb-community', `${p.community_solved} \u2714`);
+      community.title = 'Community levels solved';
+      row.appendChild(community);
+
+      content.appendChild(row);
+    }
+  } catch {
+    content.innerHTML = '';
+    content.appendChild(el('div', 'empty-text', 'Failed to load leaderboard'));
+  }
+}
+
+function goToChooser() {
+  state.screen = 'chooser';
+  state.inputChain = [];
+  state.codeInput = '';
+  state.codeError = null;
+  state.isTutorial = false;
+  removeTutorialHint();
+  renderChooser();
+}
+
+// ——— Shared Progress ———
+
+function tryShowSharedProgress(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  const userId = params.get('user');
+  if (!userId) return false;
+  renderSharedProgress(userId);
+  return true;
+}
+
+async function renderSharedProgress(userId: string) {
+  clearScreen();
+  const app = document.getElementById('app')!;
+  const container = el('div', 'chooser-screen');
+
+  const topBar = el('div', 'top-bar');
+  const backBtn = el('button', 'back-btn', '\u2190');
+  backBtn.addEventListener('click', () => {
+    window.history.replaceState(null, '', window.location.pathname);
+    navigate('');
+  });
+  topBar.appendChild(backBtn);
+  const label = el('span', 'level-label', 'Loading...');
+  topBar.appendChild(label);
+  container.appendChild(topBar);
+  app.appendChild(container);
+
+  // Fetch profile and completions
+  const [profile, completions] = await Promise.all([
+    api.fetchProfile(userId),
+    api.fetchBuiltinCompletions(userId),
+  ]);
+
+  label.textContent = profile ? `${profile.username}'s progress` : 'Shared progress';
+
+  // Build temporary progress map for rendering
+  const sharedProgress = new Map<number, LevelProgress>();
+  for (const c of completions) {
+    sharedProgress.set(c.level_index, { passed: true, stars: c.stars, bestLength: c.best_length });
+  }
+
+  renderChooserPath(container, sharedProgress, () => {});
+
+  // Disable all clicks (read-only)
+  container.querySelectorAll('.seg').forEach(seg => {
+    (seg as HTMLElement).style.pointerEvents = 'none';
+    (seg as HTMLElement).style.cursor = 'default';
+  });
+
+  // Stats
+  const passed = sharedProgress.size;
+  const totalStars = [...sharedProgress.values()].reduce((a, p) => a + p.stars, 0);
+  const stats = el('div', 'shared-stats');
+  stats.innerHTML = `${passed}/20 levels \u00b7 ${totalStars} \u2605`;
+  container.appendChild(stats);
+}
+
+// ——— Resize handler ———
+
+let resizeHandler: (() => void) | null = null;
+
+// ——— Module export ———
+
+export const codeModule: GameModule = {
+  async init() {
+    initSignatures();
+
+    // Re-render when auth state changes
+    setAuthChangeCallback(async () => {
+      if (isSignedIn()) {
+        await loadProgressFromServer();
+        if (state.progress.size > 0) syncProgressToServer();
+      }
+      if (state.screen === 'chooser') renderChooser();
+    });
+
+    // Load server progress and sync local -> server on sign-in
+    if (isSignedIn()) {
+      await loadProgressFromServer();
+      if (state.progress.size > 0) syncProgressToServer();
+    }
+
+    if (!tryShowSharedProgress()) {
+      goToChooser();
+    }
+
+    // Re-render on orientation change
+    let resizeTimer = 0;
+    resizeHandler = () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        // Don't re-render while code input is focused (mobile keyboard)
+        if (document.activeElement?.classList.contains('code-input')) return;
+        if (state.screen === 'chooser') renderChooser();
+        else if (state.screen === 'level') renderLevel();
+      }, 200);
+    };
+    window.addEventListener('resize', resizeHandler);
+  },
+
+  destroy() {
+    if (resizeHandler) {
+      window.removeEventListener('resize', resizeHandler);
+      resizeHandler = null;
+    }
+    destroyAnimations();
+  },
+};

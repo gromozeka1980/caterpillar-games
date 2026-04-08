@@ -1,0 +1,18 @@
+{
+  "name": "Caterpillar Games",
+  "short_name": "CatGames",
+  "description": "Inductive reasoning puzzle games with caterpillars",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f0e17",
+  "theme_color": "#0f0e17",
+  "icons": [
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
