@@ -246,15 +246,6 @@ function renderChooser() {
 
   renderChooserPath(container, state.progress, (id) => startLevel(id));
 
-  const btnRow = el('div', 'chooser-buttons');
-  const tutorialBtn = el('button', 'help-btn tutorial-btn', 'Tutorial');
-  tutorialBtn.addEventListener('click', () => { playClick(); startTutorial(); });
-  btnRow.appendChild(tutorialBtn);
-  const helpBtn = el('button', 'help-btn', 'How to play');
-  helpBtn.addEventListener('click', () => { playClick(); showHelp(); });
-  btnRow.appendChild(helpBtn);
-  container.appendChild(btnRow);
-
   // Share button (only for signed-in users with progress)
   if (isSignedIn() && state.progress.size > 0) {
     const shareBtn = el('button', 'share-btn', '\ud83d\udcca Share progress');
