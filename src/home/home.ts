@@ -89,5 +89,10 @@ export function renderHome() {
   }
   container.appendChild(authSection);
 
+  // Feedback link
+  const feedbackLink = el('a', 'feedback-link', 'feedback@caterpillars.games');
+  (feedbackLink as HTMLAnchorElement).href = 'mailto:feedback@caterpillars.games';
+  container.appendChild(feedbackLink);
+
   app.appendChild(container);
 }

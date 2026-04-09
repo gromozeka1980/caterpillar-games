@@ -156,6 +156,15 @@ html, body {
   margin: 4px 0;
 }
 
+.feedback-link {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  opacity: 0.5;
+  text-decoration: none;
+  transition: opacity 0.2s;
+}
+.feedback-link:hover { opacity: 1; }
+
 .home-card-title {
   font-size: 1.1rem;
   font-weight: 700;
