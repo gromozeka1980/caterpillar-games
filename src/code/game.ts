@@ -488,12 +488,13 @@ function renderGameInput() {
   const bottom = document.getElementById('bottom-section')!;
   bottom.innerHTML = '';
 
-  // Single row: preview + color buttons + action buttons
-  const builderRow = el('div', 'builder-row');
-
+  // Preview on its own line
   const previewWrapper = el('div', 'input-preview');
   previewWrapper.id = 'input-preview';
-  builderRow.appendChild(previewWrapper);
+  bottom.appendChild(previewWrapper);
+
+  // Color buttons + action buttons
+  const builderRow = el('div', 'builder-row');
 
   const colorGroup = el('div', 'btn-group color-group');
   for (let c = 0; c < 4; c++) {
