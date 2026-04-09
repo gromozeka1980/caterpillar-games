@@ -10,6 +10,8 @@ export interface GameLayout {
   panelCols: number;
   previewW: number;
   previewH: number;
+  /** Width of one column in the panel (the actual display width of a caterpillar) */
+  colW: number;
 }
 
 export interface ChooserLayout {
@@ -26,49 +28,41 @@ export function calcGameLayout(): GameLayout {
   const W = window.innerWidth;
   const H = window.innerHeight;
 
-  // Landscape phone: compact single-row bottom (~45px)
-  // Portrait/desktop: full bottom (~163px)
+  // Estimate chrome heights (top bar + panel header, bottom section with controls)
   const landscape = W > H;
-  const bottomH = (landscape && H < 500) ? 50 : 163;
-  const topH = 64; // top bar 38 + panel header 26
+  const bottomH = (landscape && H < 500) ? 70 : 130;
+  const topH = 70;
   const panelW = W / 2 - 14; // each panel width
   const listH = H - topH - bottomH;
   const maxItems = 10;
   const itemPad = 2; // .caterpillar-item vertical padding
   const gap = 2; // grid gap
 
-  let bestCols = 1, bestCatW = 0, bestCatH = 0;
+  let bestCols = 1, bestCatW = 0, bestCatH = 0, bestColW = 0;
 
   for (const cols of [1, 2]) {
     const rows = Math.ceil(maxItems / cols);
     const colW = (panelW - (cols - 1) * 4) / cols;
 
-    // Each row takes catH + itemPad, plus gap between rows
-    // total = rows * (catH + itemPad) + (rows - 1) * gap = listH
-    // catH = (listH - rows * itemPad - (rows - 1) * gap) / rows
     const catH = (listH - rows * itemPad - (rows - 1) * gap) / rows;
-    // Width from aspect ratio
     let catW = catH * CAT_ASPECT;
-    // If too wide for column, shrink to fit
     if (catW > colW) {
       catW = colW;
     }
 
-    // The variant with longer caterpillars wins
     if (catW > bestCatW) {
       bestCols = cols;
       bestCatW = catW;
       bestCatH = catW / CAT_ASPECT;
+      bestColW = colW;
     }
   }
 
   const catW = Math.round(Math.max(50, bestCatW));
   const catH = Math.round(Math.max(9, bestCatH));
+  const finalColW = Math.round(bestColW);
 
-  const previewW = Math.round(clamp(catW * 1.2, 80, 300));
-  const previewH = Math.round(previewW / CAT_ASPECT);
-
-  return { catW, catH, panelCols: bestCols, previewW, previewH };
+  return { catW, catH, panelCols: bestCols, previewW: catW, previewH: catH, colW: finalColW };
 }
 
 export function calcChooserLayout(): ChooserLayout {

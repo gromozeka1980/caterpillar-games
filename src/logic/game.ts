@@ -11,7 +11,7 @@ import {
   el, toRGB, seqKey, clearScreen, destroyAnimations, resetStagger,
   refreshLayout, getLayout, getOrCreateOverlay,
   removeOverlay, addToHistory, renderChooserPath, renderHistoryPanels,
-  trackAnimation,
+  trackAnimation, syncPreviewSize,
 } from '../shared/ui';
 import { navigate, type GameModule } from '../shared/router';
 import { initSignatures, ALL_SEQS } from '../shared/signatures';
@@ -592,6 +592,7 @@ function updateInputPreview() {
   const anim = createAnimatedCaterpillar(state.inputChain, layout.previewW, layout.previewH, 'forward', mood);
   previewAnim = anim;
   wrapper.appendChild(anim.canvas);
+  syncPreviewSize();
 }
 
 function addColor(c: number) {

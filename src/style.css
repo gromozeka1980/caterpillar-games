@@ -570,9 +570,6 @@ html, body {
 
 .input-preview {
   min-height: 36px;
-  min-width: 100px;
-  flex: 1;
-  max-width: 200px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1193,7 +1190,7 @@ html, body {
   .panel-header { padding: 3px; font-size: 0.7rem; }
   .bottom-section { padding: 4px 10px; gap: 4px; }
   .input-label { display: none; }
-  .input-preview { min-height: 28px; max-width: 140px; }
+  .input-preview { min-height: 28px; }
   .builder-row { gap: 6px; }
   .btn-group { gap: 3px; }
   .color-btn, .action-btn { width: 28px; height: 28px; border-radius: 7px; }

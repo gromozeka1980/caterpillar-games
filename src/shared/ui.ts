@@ -353,3 +353,12 @@ export function renderHistoryPanels(
 
   container.appendChild(historyArea);
 }
+
+/** Measure actual panel caterpillar width and sync preview to match */
+export function syncPreviewSize() {
+  const item = document.querySelector('.caterpillar-item');
+  const preview = document.getElementById('input-preview');
+  if (item && preview) {
+    preview.style.width = `${item.getBoundingClientRect().width}px`;
+  }
+}

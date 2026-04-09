@@ -16,7 +16,7 @@ import {
   el, toRGB, seqKey, clearScreen, destroyAnimations, resetStagger,
   refreshLayout, getLayout, getOrCreateOverlay,
   removeOverlay, addToHistory, renderChooserPath, renderHistoryPanels,
-  trackAnimation,
+  trackAnimation, syncPreviewSize,
 } from '../shared/ui';
 
 type Screen = 'menu' | 'chooser' | 'level' | 'help' | 'community' | 'create-level' | 'leaderboard' | 'profile';
@@ -1046,6 +1046,7 @@ function updateInputPreview() {
   const anim = createAnimatedCaterpillar(state.inputChain, layout.previewW, layout.previewH, 'forward', mood);
   previewAnim = anim;
   wrapper.appendChild(anim.canvas);
+  syncPreviewSize();
 }
 
 
