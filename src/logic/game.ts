@@ -520,7 +520,6 @@ function renderGameInput() {
   const previewWrapper = el('div', 'input-preview');
   previewWrapper.id = 'input-preview';
   bottom.appendChild(previewWrapper);
-  updateInputPreview();
 
   const controls = el('div', 'input-controls');
 
@@ -551,6 +550,10 @@ function renderGameInput() {
   controls.appendChild(examBtn);
 
   bottom.appendChild(controls);
+
+  // Preview must be initialized after DOM is complete
+  syncPreviewSize();
+  updateInputPreview();
 }
 
 let previewAnim: { destroy: () => void } | null = null;

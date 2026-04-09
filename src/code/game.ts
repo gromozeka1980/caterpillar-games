@@ -494,7 +494,6 @@ function renderGameInput() {
   const previewWrapper = el('div', 'input-preview');
   previewWrapper.id = 'input-preview';
   builderRow.appendChild(previewWrapper);
-  updateInputPreview();
 
   const colorGroup = el('div', 'btn-group color-group');
   for (let c = 0; c < 4; c++) {
@@ -645,6 +644,9 @@ function renderGameInput() {
 
   bottom.appendChild(codeSection);
 
+  // Preview must be initialized after DOM is complete
+  syncPreviewSize();
+  updateInputPreview();
   updateCharCounter();
   updateErrorDisplay();
 }
