@@ -45,24 +45,49 @@ export function isCurrentUserBeta(): boolean {
   return !!(currentProfile?.is_beta || currentProfile?.is_admin);
 }
 
+function getStoredAccessToken(): string | null {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        return parsed?.access_token ?? null;
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
 async function loadCurrentProfile() {
   if (!currentUser) { currentProfile = null; return; }
-  console.log('[profile] loading for', currentUser.id.slice(0, 8));
+  console.log('[profile] loading for', currentUser.id.slice(0, 8), '(raw fetch)');
   const t0 = performance.now();
   try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', currentUser.id)
-      .maybeSingle();
+    const token = getStoredAccessToken();
+    console.log('[profile] have token:', !!token, 'starting fetch');
+
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 4000);
+    const resp = await fetch(
+      `${SUPABASE_URL}/rest/v1/profiles?id=eq.${currentUser.id}&select=*`,
+      {
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: token ? `Bearer ${token}` : `Bearer ${SUPABASE_ANON_KEY}`,
+          Accept: 'application/json',
+        },
+        signal: ctrl.signal,
+      },
+    );
+    clearTimeout(to);
     const dt = Math.round(performance.now() - t0);
-    if (error) {
-      console.log('[profile] error after', dt, 'ms', error);
-      currentProfile = null;
-      return;
-    }
-    console.log('[profile] loaded in', dt, 'ms', { is_admin: (data as Profile)?.is_admin });
-    currentProfile = data as Profile | null;
+    console.log('[profile] fetch done in', dt, 'ms, status', resp.status);
+    if (!resp.ok) { currentProfile = null; return; }
+    const rows = await resp.json();
+    currentProfile = (rows && rows[0]) ? rows[0] as Profile : null;
+    console.log('[profile] parsed', { is_admin: currentProfile?.is_admin });
   } catch (e) {
     const dt = Math.round(performance.now() - t0);
     console.log('[profile] threw after', dt, 'ms', e);
