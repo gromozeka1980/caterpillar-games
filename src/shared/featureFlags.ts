@@ -1,6 +1,7 @@
 // Feature flags — fetched once at startup, cached in memory
 
-import { supabase, isCurrentUserBeta } from './supabase';
+import { isCurrentUserBeta } from './supabase';
+import { sbSelectOne, sbUpdate } from './sbRest';
 
 export interface FlagConfig {
   enabled?: boolean;   // on for everyone
@@ -23,28 +24,13 @@ let flagsCache: FlagsMap = {};
 let loaded = false;
 
 export async function initFlags(): Promise<void> {
-  console.log('[flags] loading');
-  const t0 = performance.now();
   try {
-    const { data, error } = await supabase
-      .from('feature_flags')
-      .select('flags')
-      .eq('id', 1)
-      .maybeSingle();
-    const dt = Math.round(performance.now() - t0);
-    if (error) {
-      console.log('[flags] error after', dt, 'ms', error);
-      flagsCache = {};
-    } else if (!data) {
-      console.log('[flags] no data after', dt, 'ms');
-      flagsCache = {};
-    } else {
-      console.log('[flags] loaded in', dt, 'ms');
-      flagsCache = (data.flags ?? {}) as FlagsMap;
-    }
-  } catch (e) {
-    const dt = Math.round(performance.now() - t0);
-    console.log('[flags] threw after', dt, 'ms', e);
+    const row = await sbSelectOne<{ flags: FlagsMap }>('feature_flags', {
+      select: 'flags',
+      id: 'eq.1',
+    });
+    flagsCache = row?.flags ?? {};
+  } catch {
     flagsCache = {};
   }
   loaded = true;
@@ -65,11 +51,11 @@ export function getAllFlags(): FlagsMap {
 
 export async function updateFlag(key: string, config: FlagConfig): Promise<void> {
   const newFlags = { ...flagsCache, [key]: config };
-  const { error } = await supabase
-    .from('feature_flags')
-    .update({ flags: newFlags, updated_at: new Date().toISOString() })
-    .eq('id', 1);
-  if (error) throw error;
+  await sbUpdate(
+    'feature_flags',
+    { id: 'eq.1' },
+    { flags: newFlags, updated_at: new Date().toISOString() },
+  );
   flagsCache = newFlags;
 }
 

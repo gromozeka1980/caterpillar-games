@@ -1,6 +1,7 @@
 // Fire-and-forget event tracking for analytics
 
-import { supabase, getUser } from './supabase';
+import { getUser } from './supabase';
+import { sbInsertFAF } from './sbRest';
 
 const SESSION_KEY = 'caterpillar-games-session';
 
@@ -14,12 +15,10 @@ function getSessionId(): string {
 }
 
 export function track(eventType: string, eventData?: Record<string, unknown>) {
-  const row = {
+  sbInsertFAF('events', {
     session_id: getSessionId(),
     user_id: getUser()?.id ?? null,
     event_type: eventType,
     event_data: eventData ?? null,
-  };
-  // Fire and forget — don't block UI, swallow errors
-  supabase.from('events').insert(row).then(() => { /* ok */ }, () => { /* ignore */ });
+  });
 }

@@ -1,14 +1,14 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, sbSelectOne } from './sbRest';
 
-const SUPABASE_URL = 'https://rralgdsnidvmivnxmofv.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJyYWxnZHNuaWR2bWl2bnhtb2Z2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0OTg4ODEsImV4cCI6MjA5MTA3NDg4MX0.3Jc79TFlq4ou7BtKh0Xlo1fC2ruX-5HAM7rUFCFDCOM';
-
-// No-op lock: bypasses navigator.locks entirely to avoid the known deadlock
-// issues in supabase-js where orphaned locks from crashed/reloaded tabs
-// cause auth operations to hang indefinitely.
-// See: https://github.com/supabase/supabase-js/issues/1594
-//      https://github.com/supabase/supabase-js/issues/2013
-//      https://github.com/supabase/supabase-js/issues/2111
+// Supabase client is used ONLY for auth (signIn/signOut/session/onAuthStateChange).
+// All data access goes through sbRest (raw fetch) because the supabase-js
+// query machinery has known hang issues (see sbRest.ts).
+//
+// We still pass a no-op lock as a defensive measure against the navigator.locks
+// deadlock bug affecting auth operations:
+//   https://github.com/supabase/supabase-js/issues/1594
+//   https://github.com/supabase/supabase-js/issues/2013
 const noopLock = async <R>(_name: string, _acquireTimeout: number, fn: () => Promise<R>): Promise<R> => {
   return await fn();
 };
@@ -45,52 +45,11 @@ export function isCurrentUserBeta(): boolean {
   return !!(currentProfile?.is_beta || currentProfile?.is_admin);
 }
 
-function getStoredAccessToken(): string | null {
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
-        const raw = localStorage.getItem(key);
-        if (!raw) continue;
-        const parsed = JSON.parse(raw);
-        return parsed?.access_token ?? null;
-      }
-    }
-  } catch { /* ignore */ }
-  return null;
-}
-
 async function loadCurrentProfile() {
   if (!currentUser) { currentProfile = null; return; }
-  console.log('[profile] loading for', currentUser.id.slice(0, 8), '(raw fetch)');
-  const t0 = performance.now();
   try {
-    const token = getStoredAccessToken();
-    console.log('[profile] have token:', !!token, 'starting fetch');
-
-    const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), 4000);
-    const resp = await fetch(
-      `${SUPABASE_URL}/rest/v1/profiles?id=eq.${currentUser.id}&select=*`,
-      {
-        headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: token ? `Bearer ${token}` : `Bearer ${SUPABASE_ANON_KEY}`,
-          Accept: 'application/json',
-        },
-        signal: ctrl.signal,
-      },
-    );
-    clearTimeout(to);
-    const dt = Math.round(performance.now() - t0);
-    console.log('[profile] fetch done in', dt, 'ms, status', resp.status);
-    if (!resp.ok) { currentProfile = null; return; }
-    const rows = await resp.json();
-    currentProfile = (rows && rows[0]) ? rows[0] as Profile : null;
-    console.log('[profile] parsed', { is_admin: currentProfile?.is_admin });
-  } catch (e) {
-    const dt = Math.round(performance.now() - t0);
-    console.log('[profile] threw after', dt, 'ms', e);
+    currentProfile = await sbSelectOne<Profile>('profiles', { id: `eq.${currentUser.id}` });
+  } catch {
     currentProfile = null;
   }
 }
