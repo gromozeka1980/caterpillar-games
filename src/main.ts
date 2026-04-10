@@ -9,16 +9,19 @@ import { logicModule } from './logic/game';
 import { adminModule } from './admin/admin';
 import './style.css';
 
-// Handle OAuth redirect (access_token in hash)
-if (window.location.hash.includes('access_token') && supabase) {
-  supabase.auth.getSession().then(() => {
-    window.location.replace(window.location.pathname + window.location.search);
-  });
-} else {
-  startup();
-}
+startup();
 
 async function startup() {
+  // Handle OAuth redirect (access_token in hash).
+  // Supabase client parses the token from the URL automatically; we just
+  // need to strip it from the URL before routing kicks in.
+  if (window.location.hash.includes('access_token') && supabase) {
+    try {
+      await supabase.auth.getSession();
+    } catch { /* ignore */ }
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+
   await initAuth();
   await initFlags();
 
