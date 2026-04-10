@@ -9,42 +9,73 @@ import { logicModule } from './logic/game';
 import { adminModule } from './admin/admin';
 import './style.css';
 
+function isAtHome(): boolean {
+  const h = window.location.hash;
+  return h === '' || h === '#/' || h === '#';
+}
+
+/** Wrap a promise with a timeout so startup never hangs indefinitely */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T | null> {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (!done) {
+        done = true;
+        console.warn(`[startup] ${label} timed out after ${ms}ms`);
+        resolve(null);
+      }
+    }, ms);
+    p.then((v) => {
+      if (!done) {
+        done = true;
+        clearTimeout(timer);
+        resolve(v);
+      }
+    }).catch((e) => {
+      if (!done) {
+        done = true;
+        clearTimeout(timer);
+        console.warn(`[startup] ${label} failed`, e);
+        resolve(null);
+      }
+    });
+  });
+}
+
 startup();
 
 async function startup() {
   // Handle OAuth redirect (access_token in hash).
-  // Supabase client parses the token from the URL automatically; we just
-  // need to strip it from the URL before routing kicks in.
   if (window.location.hash.includes('access_token') && supabase) {
     try {
-      await supabase.auth.getSession();
+      await withTimeout(supabase.auth.getSession(), 5000, 'OAuth getSession');
     } catch { /* ignore */ }
     history.replaceState(null, '', window.location.pathname + window.location.search);
   }
 
-  await initAuth();
-  await initFlags();
-
-  // Re-render home when auth state changes (sign in/out)
+  // Subscribe to auth changes BEFORE initAuth so we catch the initial session
   setAuthChangeCallback(async () => {
-    await initFlags();  // re-evaluate flags (beta gating depends on profile)
-    // Only re-render home if we're currently on it
-    if (window.location.hash === '' || window.location.hash === '#/' || window.location.hash === '#') {
-      renderHome();
-    }
+    await withTimeout(initFlags(), 5000, 'initFlags on auth change');
+    if (isAtHome()) renderHome();
   });
 
-  // Register routes
+  // Register routes and start router IMMEDIATELY so the user sees something
+  // even if auth/flags take a while (or hang entirely).
   registerRoute('', homeModule);
   registerRoute('code', codeModule);
   registerRoute('logic', logicModule);
   registerRoute('admin', adminModule);
-
-  // Start routing
   initRouter();
 
   // Service worker
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
+
+  // Background: load auth + flags with timeouts so they can't block UI.
+  // Once they complete, re-render home to reflect signed-in state.
+  await withTimeout(initAuth(), 5000, 'initAuth');
+  await withTimeout(initFlags(), 5000, 'initFlags');
+
+  if (isAtHome()) renderHome();
 }
