@@ -1310,12 +1310,10 @@ html, body {
   background: rgba(0,0,0,0.2);
   border-radius: 6px;
   padding: 6px;
-  max-height: 400px;
-  overflow-y: auto;
 }
 .admin-event-row {
   display: grid;
-  grid-template-columns: 130px 90px 70px 1fr;
+  grid-template-columns: 130px 90px 70px minmax(0, 1fr);
   gap: 8px;
   padding: 3px 6px;
   border-bottom: 1px solid rgba(255,255,255,0.04);
@@ -1323,7 +1321,26 @@ html, body {
 .admin-event-time { color: var(--text-muted); }
 .admin-event-type { color: var(--valid); font-weight: 600; }
 .admin-event-session { color: var(--text-muted); }
-.admin-event-data { color: var(--gold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-event-data {
+  color: var(--gold);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  min-width: 0;
+}
+
+/* Mobile: stack event row fields vertically so JSON doesn't overflow */
+@media (max-width: 600px) {
+  .admin-event-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+  }
+  .admin-event-time, .admin-event-type, .admin-event-session {
+    display: inline;
+  }
+  .admin-event-data { font-size: 0.7rem; }
+}
 
 /* ——— Responsive ——— */
 
