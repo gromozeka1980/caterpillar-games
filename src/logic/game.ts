@@ -17,7 +17,6 @@ import { navigate, type GameModule } from '../shared/router';
 import { initSignatures, ALL_SEQS } from '../shared/signatures';
 import { getUser, isSignedIn, setAuthChangeCallback, type CommunityLevel } from '../shared/supabase';
 import * as api from '../shared/api';
-import { track } from '../shared/analytics';
 
 type Screen = 'menu' | 'chooser' | 'level' | 'help' | 'community' | 'leaderboard' | 'profile';
 
@@ -426,7 +425,6 @@ function handleTutorialPass() {
 // ——— Level ———
 
 function startLevel(levelId: number) {
-  track('level_open', { mode: 'logic', level: levelId + 1, community: false });
   state.currentLevel = levelId;
   state.currentRule = rules[levelId];
   state.communityLevel = null;
@@ -744,15 +742,6 @@ function handleExamPass() {
   if (state.examAttempts <= 1) stars = 3;
   else if (state.examAttempts <= 2) stars = 2;
 
-  track('level_pass', {
-    mode: 'logic',
-    level: isCommunity ? null : state.currentLevel + 1,
-    community: isCommunity,
-    community_id: isCommunity ? state.communityLevel!.id : null,
-    exam_attempts: state.examAttempts,
-    stars,
-  });
-
   // Save progress for built-in levels
   if (!isCommunity) {
     const existing = state.progress.get(state.currentLevel);
@@ -986,7 +975,6 @@ async function showCommunityBrowser(sort: api.LevelSort = 'newest') {
 // ——— Community Level Play ———
 
 async function startCommunityLevel(level: CommunityLevel) {
-  track('level_open', { mode: 'logic', community: true, community_id: level.id, title: level.title });
   // Show loading screen immediately
   clearScreen();
   const app = document.getElementById('app')!;

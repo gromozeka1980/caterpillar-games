@@ -11,7 +11,6 @@ import { evaluateExpression, isPyodideReady } from './pyodide';
 import { getStars, MAX_CODE_LENGTH, STAR_THRESHOLDS } from './starThresholds';
 import { getUser, isSignedIn, setAuthChangeCallback, type CommunityLevel } from '../shared/supabase';
 import * as api from '../shared/api';
-import { track } from '../shared/analytics';
 import { navigate, type GameModule } from '../shared/router';
 import {
   el, toRGB, seqKey, clearScreen, destroyAnimations, resetStagger,
@@ -398,7 +397,6 @@ function handleTutorialPass() {
 // ——— Level ———
 
 function startLevel(levelId: number) {
-  track('level_open', { mode: 'code', level: levelId + 1, community: false });
   state.currentLevel = levelId;
   state.currentRule = rules[levelId];
   state.communityLevel = null;
@@ -887,13 +885,6 @@ function showErrorWithCaterpillar(message: string, seq: number[], mood: Mood = '
 function handlePass() {
   const codeLen = state.codeInput.trim().length;
   const isCommunity = state.communityLevel !== null;
-  track('level_pass', {
-    mode: 'code',
-    level: isCommunity ? null : state.currentLevel + 1,
-    community: isCommunity,
-    community_id: isCommunity ? state.communityLevel!.id : null,
-    code_length: codeLen,
-  });
 
   // Save progress for built-in levels
   if (!isCommunity) {
@@ -1412,7 +1403,6 @@ async function showCreateLevel() {
 // ——— Community Level Play ———
 
 async function startCommunityLevel(level: CommunityLevel) {
-  track('level_open', { mode: 'code', community: true, community_id: level.id, title: level.title });
   // Show loading screen immediately
   clearScreen();
   const app = document.getElementById('app')!;
