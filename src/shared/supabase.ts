@@ -30,13 +30,27 @@ export function isCurrentUserBeta(): boolean {
 
 async function loadCurrentProfile() {
   if (!currentUser) { currentProfile = null; return; }
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', currentUser.id)
-    .maybeSingle();
-  if (error) { currentProfile = null; return; }
-  currentProfile = data as Profile | null;
+  console.log('[profile] loading for', currentUser.id.slice(0, 8));
+  const t0 = performance.now();
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', currentUser.id)
+      .maybeSingle();
+    const dt = Math.round(performance.now() - t0);
+    if (error) {
+      console.log('[profile] error after', dt, 'ms', error);
+      currentProfile = null;
+      return;
+    }
+    console.log('[profile] loaded in', dt, 'ms', { is_admin: (data as Profile)?.is_admin });
+    currentProfile = data as Profile | null;
+  } catch (e) {
+    const dt = Math.round(performance.now() - t0);
+    console.log('[profile] threw after', dt, 'ms', e);
+    currentProfile = null;
+  }
 }
 
 export function isSupabaseAvailable(): boolean {

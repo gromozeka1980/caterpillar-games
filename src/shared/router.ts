@@ -35,9 +35,11 @@ function parseRoute(): Route {
 
 async function handleRoute() {
   const route = parseRoute();
-  if (route === currentRoute) return;
+  console.log('[router] handleRoute', { from: currentRoute, to: route, hash: window.location.hash });
+  if (route === currentRoute) { console.log('[router] same route, skip'); return; }
 
   if (currentModule) {
+    console.log('[router] destroying', currentRoute);
     currentModule.destroy();
   }
 
@@ -47,12 +49,21 @@ async function handleRoute() {
   track('page_view', { route: route || 'home' });
 
   if (currentModule) {
+    const t0 = performance.now();
+    console.log('[router] init', route || 'home');
     await currentModule.init();
+    console.log('[router] init done', route || 'home', 'in', Math.round(performance.now() - t0), 'ms');
+  } else {
+    console.log('[router] no module for route', route);
   }
 }
 
 export function initRouter() {
-  window.addEventListener('hashchange', () => handleRoute());
+  window.addEventListener('hashchange', () => {
+    console.log('[router] hashchange event', window.location.hash);
+    handleRoute();
+  });
+  console.log('[router] initial handleRoute');
   handleRoute();
 }
 

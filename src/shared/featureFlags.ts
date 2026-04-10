@@ -23,18 +23,28 @@ let flagsCache: FlagsMap = {};
 let loaded = false;
 
 export async function initFlags(): Promise<void> {
+  console.log('[flags] loading');
+  const t0 = performance.now();
   try {
     const { data, error } = await supabase
       .from('feature_flags')
       .select('flags')
       .eq('id', 1)
       .maybeSingle();
-    if (error || !data) {
+    const dt = Math.round(performance.now() - t0);
+    if (error) {
+      console.log('[flags] error after', dt, 'ms', error);
+      flagsCache = {};
+    } else if (!data) {
+      console.log('[flags] no data after', dt, 'ms');
       flagsCache = {};
     } else {
+      console.log('[flags] loaded in', dt, 'ms');
       flagsCache = (data.flags ?? {}) as FlagsMap;
     }
-  } catch {
+  } catch (e) {
+    const dt = Math.round(performance.now() - t0);
+    console.log('[flags] threw after', dt, 'ms', e);
     flagsCache = {};
   }
   loaded = true;

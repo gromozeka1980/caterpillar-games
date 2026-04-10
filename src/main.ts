@@ -14,6 +14,10 @@ function isAtHome(): boolean {
   return h === '' || h === '#/' || h === '#';
 }
 
+function dbg(label: string, ...args: unknown[]) {
+  console.log(`[startup] ${label}`, ...args);
+}
+
 /** Wrap a promise with a timeout so startup never hangs indefinitely */
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T | null> {
   return new Promise((resolve) => {
@@ -45,18 +49,26 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T | n
 startup();
 
 async function startup() {
+  dbg('begin', { hash: window.location.hash, href: window.location.href });
+
   // Handle OAuth redirect (access_token in hash).
   if (window.location.hash.includes('access_token') && supabase) {
+    dbg('oauth: getSession start');
     try {
       await withTimeout(supabase.auth.getSession(), 5000, 'OAuth getSession');
     } catch { /* ignore */ }
+    dbg('oauth: getSession done, stripping hash');
     history.replaceState(null, '', window.location.pathname + window.location.search);
   }
 
   // Subscribe to auth changes BEFORE initAuth so we catch the initial session
   setAuthChangeCallback(async () => {
+    dbg('auth change callback');
     await withTimeout(initFlags(), 5000, 'initFlags on auth change');
-    if (isAtHome()) renderHome();
+    if (isAtHome()) {
+      dbg('auth change: re-rendering home');
+      renderHome();
+    }
   });
 
   // Register routes and start router IMMEDIATELY so the user sees something
@@ -65,7 +77,9 @@ async function startup() {
   registerRoute('code', codeModule);
   registerRoute('logic', logicModule);
   registerRoute('admin', adminModule);
+  dbg('routes registered, starting router');
   initRouter();
+  dbg('router started');
 
   // Service worker
   if ('serviceWorker' in navigator) {
@@ -74,8 +88,16 @@ async function startup() {
 
   // Background: load auth + flags with timeouts so they can't block UI.
   // Once they complete, re-render home to reflect signed-in state.
+  dbg('initAuth start');
   await withTimeout(initAuth(), 5000, 'initAuth');
+  dbg('initAuth done');
+  dbg('initFlags start');
   await withTimeout(initFlags(), 5000, 'initFlags');
+  dbg('initFlags done');
 
-  if (isAtHome()) renderHome();
+  if (isAtHome()) {
+    dbg('re-rendering home after background init');
+    renderHome();
+  }
+  dbg('startup complete');
 }
