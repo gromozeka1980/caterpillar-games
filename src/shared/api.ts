@@ -188,8 +188,9 @@ export async function fetchCodeLeaderboard(limit = 20): Promise<LeaderboardEntry
 
   const { data: profiles, error: pErr } = await db()
     .from('profiles')
-    .select('id, username, avatar_url, community_solved')
-    .in('id', userIds);
+    .select('id, username, avatar_url, community_solved, exclude_from_leaderboard')
+    .in('id', userIds)
+    .eq('exclude_from_leaderboard', false);
   if (pErr || !profiles) return [];
 
   const entries: LeaderboardEntry[] = profiles.map(p => ({
@@ -234,8 +235,9 @@ export async function fetchLogicLeaderboard(limit = 20): Promise<LeaderboardEntr
 
   const { data: profiles, error: pErr } = await db()
     .from('profiles')
-    .select('id, username, avatar_url, community_solved')
-    .in('id', userIds);
+    .select('id, username, avatar_url, community_solved, exclude_from_leaderboard')
+    .in('id', userIds)
+    .eq('exclude_from_leaderboard', false);
   if (pErr || !profiles) return [];
 
   const entries: LeaderboardEntry[] = profiles.map(p => ({
@@ -248,6 +250,42 @@ export async function fetchLogicLeaderboard(limit = 20): Promise<LeaderboardEntr
 
   entries.sort((a, b) => b.builtin_stars - a.builtin_stars || b.community_solved - a.community_solved);
   return entries.slice(0, limit);
+}
+
+// ——— Admin functions ———
+
+export interface AdminUserRow {
+  id: string;
+  username: string;
+  avatar_url: string | null;
+  builtin_stars: number;
+  community_solved: number;
+  levels_created: number;
+  is_admin: boolean;
+  is_beta: boolean;
+  exclude_from_leaderboard: boolean;
+  created_at: string;
+}
+
+export async function fetchAllProfiles(limit = 200): Promise<AdminUserRow[]> {
+  const { data, error } = await db()
+    .from('profiles')
+    .select('id, username, avatar_url, builtin_stars, community_solved, levels_created, is_admin, is_beta, exclude_from_leaderboard, created_at')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []) as AdminUserRow[];
+}
+
+export async function updateUserRoles(
+  userId: string,
+  roles: { is_admin?: boolean; is_beta?: boolean; exclude_from_leaderboard?: boolean },
+): Promise<void> {
+  const { error } = await db()
+    .from('profiles')
+    .update(roles)
+    .eq('id', userId);
+  if (error) throw error;
 }
 
 // ——— Sync built-in progress ———

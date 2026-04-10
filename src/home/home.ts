@@ -4,7 +4,7 @@ import { createAnimatedCaterpillar } from '../shared/caterpillar';
 import { el, clearScreen, destroyAnimations, trackAnimation } from '../shared/ui';
 import { playClick } from '../shared/sounds';
 import { navigate } from '../shared/router';
-import { isSignedIn, getUser, signInWithGitHub, signInWithGoogle, signOut } from '../shared/supabase';
+import { isSignedIn, getUser, signInWithGitHub, signInWithGoogle, signOut, isCurrentUserAdmin } from '../shared/supabase';
 import type { GameModule } from '../shared/router';
 
 export const homeModule: GameModule = {
@@ -71,6 +71,11 @@ export function renderHome() {
     authSection.appendChild(userRow);
 
     const btnRow = el('div', 'auth-btn-row');
+    if (isCurrentUserAdmin()) {
+      const adminBtn = el('button', 'auth-link', '\ud83d\udd27 Admin');
+      adminBtn.addEventListener('click', () => { playClick(); navigate('admin'); });
+      btnRow.appendChild(adminBtn);
+    }
     const outBtn = el('button', 'auth-link', 'Sign out');
     outBtn.addEventListener('click', async () => { await signOut(); renderHome(); });
     btnRow.appendChild(outBtn);

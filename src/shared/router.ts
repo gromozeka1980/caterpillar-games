@@ -5,7 +5,7 @@ export interface GameModule {
   destroy(): void;
 }
 
-type Route = '' | 'code' | 'logic';
+type Route = '' | 'code' | 'logic' | 'admin';
 
 const modules = new Map<Route, GameModule>();
 let currentRoute: Route | null = null;
@@ -27,7 +27,7 @@ export function navigate(route: Route) {
 
 function parseRoute(): Route {
   const hash = window.location.hash.replace(/^#\/?/, '');
-  if (hash === 'code' || hash === 'logic') return hash;
+  if (hash === 'code' || hash === 'logic' || hash === 'admin') return hash;
   return '';
 }
 

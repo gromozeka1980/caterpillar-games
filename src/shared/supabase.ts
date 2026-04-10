@@ -6,13 +6,37 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let currentUser: User | null = null;
+let currentProfile: Profile | null = null;
 
 export function getUser(): User | null {
   return currentUser;
 }
 
+export function getCurrentProfile(): Profile | null {
+  return currentProfile;
+}
+
 export function isSignedIn(): boolean {
   return currentUser !== null;
+}
+
+export function isCurrentUserAdmin(): boolean {
+  return !!currentProfile?.is_admin;
+}
+
+export function isCurrentUserBeta(): boolean {
+  return !!(currentProfile?.is_beta || currentProfile?.is_admin);
+}
+
+async function loadCurrentProfile() {
+  if (!currentUser) { currentProfile = null; return; }
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', currentUser.id)
+    .maybeSingle();
+  if (error) { currentProfile = null; return; }
+  currentProfile = data as Profile | null;
 }
 
 export function isSupabaseAvailable(): boolean {
@@ -30,10 +54,12 @@ export async function initAuth(): Promise<User | null> {
   if (!supabase) return null;
 
   // Subscribe to auth changes
-  supabase.auth.onAuthStateChange((_event, session) => {
+  supabase.auth.onAuthStateChange(async (_event, session) => {
     const wasSignedIn = currentUser !== null;
     currentUser = session?.user ?? null;
     const isNowSignedIn = currentUser !== null;
+
+    await loadCurrentProfile();
 
     // If auth state actually changed, re-render
     if (wasSignedIn !== isNowSignedIn && onAuthChange) {
@@ -44,6 +70,7 @@ export async function initAuth(): Promise<User | null> {
   // Check for existing session
   const { data: { session } } = await supabase.auth.getSession();
   currentUser = session?.user ?? null;
+  await loadCurrentProfile();
 
   return currentUser;
 }
@@ -68,6 +95,7 @@ export async function signOut() {
   if (!supabase) return;
   await supabase.auth.signOut();
   currentUser = null;
+  currentProfile = null;
 }
 
 // ——— Profile types ———
@@ -82,6 +110,9 @@ export interface Profile {
   levels_created: number;
   total_upvotes_received: number;
   created_at: string;
+  is_admin?: boolean;
+  is_beta?: boolean;
+  exclude_from_leaderboard?: boolean;
 }
 
 export interface CommunityLevel {
