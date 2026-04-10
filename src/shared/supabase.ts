@@ -3,7 +3,24 @@ import { createClient, type SupabaseClient, type User } from '@supabase/supabase
 const SUPABASE_URL = 'https://rralgdsnidvmivnxmofv.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJyYWxnZHNuaWR2bWl2bnhtb2Z2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0OTg4ODEsImV4cCI6MjA5MTA3NDg4MX0.3Jc79TFlq4ou7BtKh0Xlo1fC2ruX-5HAM7rUFCFDCOM';
 
-export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// No-op lock: bypasses navigator.locks entirely to avoid the known deadlock
+// issues in supabase-js where orphaned locks from crashed/reloaded tabs
+// cause auth operations to hang indefinitely.
+// See: https://github.com/supabase/supabase-js/issues/1594
+//      https://github.com/supabase/supabase-js/issues/2013
+//      https://github.com/supabase/supabase-js/issues/2111
+const noopLock = async <R>(_name: string, _acquireTimeout: number, fn: () => Promise<R>): Promise<R> => {
+  return await fn();
+};
+
+export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    lock: noopLock,
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  },
+});
 
 let currentUser: User | null = null;
 let currentProfile: Profile | null = null;

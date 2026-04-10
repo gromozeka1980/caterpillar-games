@@ -1,4 +1,4 @@
-const CACHE_NAME = 'caterpillar-games-v5';
+const CACHE_NAME = 'caterpillar-games-v6';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
