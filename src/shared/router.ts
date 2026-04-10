@@ -1,5 +1,7 @@
 // Simple hash-based router for switching between game modes
 
+import { track } from './analytics';
+
 export interface GameModule {
   init(): void | Promise<void>;
   destroy(): void;
@@ -41,6 +43,8 @@ async function handleRoute() {
 
   currentRoute = route;
   currentModule = modules.get(route) ?? null;
+
+  track('page_view', { route: route || 'home' });
 
   if (currentModule) {
     await currentModule.init();

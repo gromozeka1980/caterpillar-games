@@ -288,6 +288,86 @@ export async function updateUserRoles(
   if (error) throw error;
 }
 
+// ——— Analytics (admin only) ———
+
+export interface EventRow {
+  id: number;
+  created_at: string;
+  session_id: string;
+  user_id: string | null;
+  event_type: string;
+  event_data: Record<string, unknown> | null;
+}
+
+export async function fetchRecentEvents(limit = 200): Promise<EventRow[]> {
+  const { data, error } = await db()
+    .from('events')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []) as EventRow[];
+}
+
+export interface AnalyticsSummary {
+  eventsLastHour: number;
+  eventsLast24h: number;
+  uniqueSessionsLastHour: number;
+  uniqueSessionsLast24h: number;
+  uniqueUsersLast24h: number;
+  topLevels: { mode: string; level: number | string; opens: number }[];
+}
+
+export async function fetchAnalyticsSummary(): Promise<AnalyticsSummary> {
+  const now = Date.now();
+  const hourAgo = new Date(now - 60 * 60 * 1000).toISOString();
+  const dayAgo = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+
+  // Fetch last 24h of events for analysis
+  const { data, error } = await db()
+    .from('events')
+    .select('*')
+    .gte('created_at', dayAgo)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  const events = (data ?? []) as EventRow[];
+
+  const lastHourEvents = events.filter(e => e.created_at >= hourAgo);
+  const sessionsLastHour = new Set(lastHourEvents.map(e => e.session_id));
+  const sessionsLast24h = new Set(events.map(e => e.session_id));
+  const usersLast24h = new Set(events.filter(e => e.user_id).map(e => e.user_id!));
+
+  // Top levels opened in last 24h
+  const levelCounts = new Map<string, number>();
+  for (const e of events) {
+    if (e.event_type !== 'level_open') continue;
+    const data = e.event_data ?? {};
+    const mode = String((data as any).mode ?? '?');
+    const community = (data as any).community === true;
+    const level = community
+      ? `community:${String((data as any).title ?? (data as any).community_id ?? '?')}`
+      : String((data as any).level ?? '?');
+    const key = `${mode}|${level}`;
+    levelCounts.set(key, (levelCounts.get(key) ?? 0) + 1);
+  }
+  const topLevels = [...levelCounts.entries()]
+    .map(([key, opens]) => {
+      const [mode, level] = key.split('|');
+      return { mode, level, opens };
+    })
+    .sort((a, b) => b.opens - a.opens)
+    .slice(0, 10);
+
+  return {
+    eventsLastHour: lastHourEvents.length,
+    eventsLast24h: events.length,
+    uniqueSessionsLastHour: sessionsLastHour.size,
+    uniqueSessionsLast24h: sessionsLast24h.size,
+    uniqueUsersLast24h: usersLast24h.size,
+    topLevels,
+  };
+}
+
 // ——— Sync built-in progress ———
 
 export type GameMode = 'code' | 'logic';
