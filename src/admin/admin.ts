@@ -243,15 +243,15 @@ async function renderAnalytics() {
     summaryGrid.appendChild(makeCard('Users / 24h', summary.uniqueUsersLast24h));
     content.appendChild(summaryGrid);
 
-    // Top levels
+    // Levels opened (last 24h) — sorted by unique sessions
     if (summary.topLevels.length > 0) {
-      content.appendChild(el('h3', 'admin-section-title', 'Top levels (last 24h)'));
+      content.appendChild(el('h3', 'admin-section-title', 'Levels opened (last 24h, unique sessions)'));
       const topList = el('div', 'admin-top-list');
       for (const row of summary.topLevels) {
         const item = el('div', 'admin-top-row');
         item.appendChild(el('span', 'admin-top-mode', row.mode));
         item.appendChild(el('span', 'admin-top-level', String(row.level)));
-        item.appendChild(el('span', 'admin-top-opens', `${row.opens} opens`));
+        item.appendChild(el('span', 'admin-top-opens', String(row.opens)));
         topList.appendChild(item);
       }
       content.appendChild(topList);

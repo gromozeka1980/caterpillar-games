@@ -263,7 +263,9 @@ export async function fetchAnalyticsSummary(): Promise<AnalyticsSummary> {
   const sessionsLast24h = new Set(events.map(e => e.session_id));
   const usersLast24h = new Set(events.filter(e => e.user_id).map(e => e.user_id!));
 
-  const levelCounts = new Map<string, number>();
+  // Top levels by number of unique sessions that opened them (one session
+  // opening the same level multiple times counts as 1)
+  const levelSessions = new Map<string, Set<string>>();
   for (const e of events) {
     if (e.event_type !== 'level_open') continue;
     const data = e.event_data ?? {};
@@ -273,15 +275,15 @@ export async function fetchAnalyticsSummary(): Promise<AnalyticsSummary> {
       ? `community:${String((data as any).title ?? (data as any).community_id ?? '?')}`
       : String((data as any).level ?? '?');
     const key = `${mode}|${level}`;
-    levelCounts.set(key, (levelCounts.get(key) ?? 0) + 1);
+    if (!levelSessions.has(key)) levelSessions.set(key, new Set());
+    levelSessions.get(key)!.add(e.session_id);
   }
-  const topLevels = [...levelCounts.entries()]
-    .map(([key, opens]) => {
+  const topLevels = [...levelSessions.entries()]
+    .map(([key, sessions]) => {
       const [mode, level] = key.split('|');
-      return { mode, level, opens };
+      return { mode, level, opens: sessions.size };
     })
-    .sort((a, b) => b.opens - a.opens)
-    .slice(0, 10);
+    .sort((a, b) => b.opens - a.opens);
 
   return {
     eventsLastHour: lastHourEvents.length,
