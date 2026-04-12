@@ -156,6 +156,54 @@ html, body {
   margin: 4px 0;
 }
 
+/* ——— Other Games ——— */
+
+.other-games-title {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  margin-top: 8px;
+}
+
+.home-card-small {
+  padding: 14px 16px;
+  min-width: 160px;
+}
+
+/* ——— Forge iframe ——— */
+
+.forge-screen {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.forge-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.forge-back-btn {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10;
+  background: rgba(15, 14, 23, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  padding: 4px 12px;
+  border-radius: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.forge-back-btn:hover {
+  background: rgba(15, 14, 23, 0.95);
+  color: var(--text);
+}
+
 .feedback-link {
   font-size: 0.75rem;
   color: var(--text-muted);

@@ -7,6 +7,7 @@ import { homeModule, renderHome } from './home/home';
 import { codeModule } from './code/game';
 import { logicModule } from './logic/game';
 import { adminModule } from './admin/admin';
+import { forgeModule } from './forge/forge';
 import './style.css';
 
 function isAtHome(): boolean {
@@ -34,6 +35,7 @@ async function startup() {
   registerRoute('code', codeModule);
   registerRoute('logic', logicModule);
   registerRoute('admin', adminModule);
+  registerRoute('forge', forgeModule);
   initRouter();
 
   // Service worker

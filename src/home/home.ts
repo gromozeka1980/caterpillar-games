@@ -52,6 +52,20 @@ export function renderHome() {
 
   container.appendChild(cards);
 
+  // Other Games section
+  const otherTitle = el('div', 'other-games-title', 'Other Games');
+  container.appendChild(otherTitle);
+
+  const otherCards = el('div', 'home-cards other-games-cards');
+
+  const forgeCard = el('div', 'home-card home-card-small');
+  forgeCard.appendChild(el('div', 'home-card-title', '\ud83d\udd22 Number Forge'));
+  forgeCard.appendChild(el('div', 'home-card-desc', 'Combine numbers with +\u2212\u00d7\u00f7 to hit the target'));
+  forgeCard.addEventListener('click', () => { playClick(); navigate('forge'); });
+  otherCards.appendChild(forgeCard);
+
+  container.appendChild(otherCards);
+
   // Auth section
   const authSection = el('div', 'auth-section');
   if (isSignedIn()) {
